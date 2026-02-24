@@ -1,0 +1,17 @@
+{
+	"node": "n8n-nodes-leapterTool",
+	"nodeVersion": "1.0",
+	"codexVersion": "1.0",
+	"categories": ["AI"],
+	"subcategories": {
+		"AI": ["Tools"]
+	},
+	"resources": {
+		"primaryDocumentation": [
+			{
+				"url": "https://github.com/genielabs-com/n8n-nodes-leapter#readme"
+			}
+		]
+	},
+	"alias": ["leapter", "blueprint", "ai tool", "ai agent"]
+}
