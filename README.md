@@ -166,7 +166,7 @@ The node returns:
 
 - [n8n community nodes documentation](https://docs.n8n.io/integrations/community-nodes/)
 - [Leapter Documentation](https://docs.leapter.com)
-- [Leapter n8n Integration Guide](https://github.com/genielabs-com/n8n-nodes-leapter#readme)
+- [Leapter n8n Integration Guide](https://github.com/leapter/n8n-nodes-leapter#readme)
 
 ## Version history
 
