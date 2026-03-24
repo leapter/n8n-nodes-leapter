@@ -6,12 +6,12 @@
   "resources": {
     "primaryDocumentation": [
       {
-        "url": "https://github.com/genielabs-com/n8n-nodes-leapter#readme"
+        "url": "https://github.com/leapter/n8n-nodes-leapter#readme"
       }
     ],
     "credentialDocumentation": [
       {
-        "url": "https://github.com/genielabs-com/n8n-nodes-leapter#credentials"
+        "url": "https://github.com/leapter/n8n-nodes-leapter#credentials"
       }
     ]
   },
