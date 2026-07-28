@@ -1,57 +1,57 @@
 {
-    "name": "@leapter/n8n-nodes-leapter",
-    "version": "0.1.2",
-    "description": "n8n community node for Leapter - execute AI blueprints and workflows dynamically via OpenAPI",
-    "license": "MIT",
-    "author": {
-        "name": "Leapter",
-        "email": "developers@leapter.com"
-    },
-    "homepage": "https://github.com/leapter/n8n-nodes-leapter#readme",
-    "keywords": [
-        "n8n-community-node-package"
-    ],
-    "main": "dist/nodes/Leapter/Leapter.node.js",
-    "repository": {
-        "type": "git",
-        "url": "https://github.com/leapter/n8n-nodes-leapter.git"
-    },
-    "bugs": {
-        "url": "https://github.com/leapter/n8n-nodes-leapter/issues"
-    },
-    "engines": {
-        "node": ">=18.0.0"
-    },
-    "scripts": {
-        "build": "n8n-node build",
-        "build:watch": "tsc --watch",
-        "dev": "n8n-node dev",
-        "lint": "n8n-node lint",
-        "lint:fix": "n8n-node lint --fix",
-        "release": "n8n-node release",
-        "prepublishOnly": "n8n-node prerelease"
-    },
-    "files": [
-        "dist"
-    ],
-    "n8n": {
-        "n8nNodesApiVersion": 1,
-        "strict": true,
-        "credentials": [
-            "dist/credentials/LeapterApi.credentials.js"
-        ],
-        "nodes": [
-            "dist/nodes/Leapter/Leapter.node.js"
-        ]
-    },
-    "devDependencies": {
-        "@n8n/node-cli": "^0.41.2",
-        "eslint": "9.39.4",
-        "prettier": "3.6.2",
-        "release-it": "^21.0.0",
-        "typescript": "5.9.2"
-    },
-    "peerDependencies": {
-        "n8n-workflow": "*"
-    }
+	"name": "@leapter/n8n-nodes-leapter",
+	"version": "0.1.2",
+	"description": "n8n community node for Leapter - execute AI blueprints and workflows dynamically via OpenAPI",
+	"license": "MIT",
+	"author": {
+		"name": "Leapter",
+		"email": "developers@leapter.com"
+	},
+	"homepage": "https://github.com/leapter/n8n-nodes-leapter#readme",
+	"keywords": [
+		"n8n-community-node-package"
+	],
+	"main": "dist/nodes/Leapter/Leapter.node.js",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/leapter/n8n-nodes-leapter.git"
+	},
+	"bugs": {
+		"url": "https://github.com/leapter/n8n-nodes-leapter/issues"
+	},
+	"engines": {
+		"node": ">=18.0.0"
+	},
+	"scripts": {
+		"build": "n8n-node build",
+		"build:watch": "tsc --watch",
+		"dev": "n8n-node dev",
+		"lint": "n8n-node lint",
+		"lint:fix": "n8n-node lint --fix",
+		"release": "n8n-node release",
+		"prepublishOnly": "n8n-node prerelease"
+	},
+	"files": [
+		"dist"
+	],
+	"n8n": {
+		"n8nNodesApiVersion": 1,
+		"strict": true,
+		"credentials": [
+			"dist/credentials/LeapterApi.credentials.js"
+		],
+		"nodes": [
+			"dist/nodes/Leapter/Leapter.node.js"
+		]
+	},
+	"devDependencies": {
+		"@n8n/node-cli": "^0.41.2",
+		"eslint": "9.39.4",
+		"prettier": "3.6.2",
+		"release-it": "^20.2.0",
+		"typescript": "5.9.2"
+	},
+	"peerDependencies": {
+		"n8n-workflow": "*"
+	}
 }
