@@ -119,8 +119,7 @@ To use this node, you need a Leapter API key.
 
 ## Compatibility
 
-- **Minimum n8n version**: 0.228.0 (required for resourceMapper UI component)
-- **Recommended**: n8n 1.0.0 or later
+- **Minimum n8n version**: 2.0.0
 - **Tested with**: n8n 2.x
 
 ## Usage

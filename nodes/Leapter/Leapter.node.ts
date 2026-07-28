@@ -11,7 +11,7 @@ import type {
   IHttpRequestMethods,
   IDataObject,
 } from 'n8n-workflow';
-import { NodeOperationError } from 'n8n-workflow';
+import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
 /**
  * OpenAPI 3.0 Specification types
@@ -111,8 +111,8 @@ export class Leapter implements INodeType {
     defaults: {
       name: 'Leapter',
     },
-    inputs: ['main'],
-    outputs: ['main'],
+    inputs: [NodeConnectionTypes.Main],
+    outputs: [NodeConnectionTypes.Main],
     credentials: [
       {
         name: 'leapterApi',
