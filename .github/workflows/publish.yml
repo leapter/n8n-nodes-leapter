@@ -19,14 +19,14 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22.14.0'
+          node-version: '22.x'
           registry-url: 'https://registry.npmjs.org'
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm build
 
-      # Node 22.14.0 bundles npm 10.9.2; `npm stage` landed in npm 11.15.0.
+      # The Node 22 line bundles npm 10.x; `npm stage` landed in npm 11.15.0.
       - run: npm install --global npm@11.15.0
 
       # Stage-only trusted publisher: `npm publish` is not an allowed action.
