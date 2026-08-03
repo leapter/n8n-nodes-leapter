@@ -17,8 +17,9 @@ pnpm build            # Compile TypeScript to dist/
 pnpm lint             # Check for lint errors
 pnpm lint:fix         # Auto-fix lint errors
 pnpm dev              # Start dev mode with n8n
-pnpm release          # Create a release
 ```
+
+Releases are cut from the GitHub Releases UI (draft a release with a `vX.Y.Z` tag, publish it). `publish.yml` derives the npm version from the tag; the `version` in `package.json` is a permanent placeholder — never bump it.
 
 ## Project Structure
 ```

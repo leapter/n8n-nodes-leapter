@@ -55,7 +55,8 @@ pnpm install
 | `pnpm build:watch` | Build and watch for changes |
 | `pnpm lint` | Run ESLint |
 | `pnpm lint:fix` | Fix linting issues |
-| `pnpm release` | Publish a new release |
+
+Releases are cut from the GitHub Releases UI: draft a release with a `vX.Y.Z` tag and publish it. The version is taken from the tag (see `.github/workflows/publish.yml`); the `version` field in `package.json` is a placeholder.
 
 ### Running Locally
 

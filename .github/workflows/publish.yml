@@ -1,3 +1,23 @@
+# Publishes to npm with provenance when a GitHub Release is published.
+#
+# ─── HOW TO CUT A RELEASE ──────────────────────────────────────────────────────
+#
+#   1. Releases → Draft a new release → type the next tag, e.g. v0.1.3.
+#      The tag is the single source of truth for the version; package.json
+#      carries a placeholder and is never bumped in git.
+#   2. Click "Generate release notes" and edit them — GitHub builds the notes
+#      from PR titles, so anything in a commit body (notably a BREAKING CHANGE
+#      footer) will NOT appear and must be added by hand.
+#   3. Click "Publish release". That creates the tag and runs this workflow,
+#      which writes the tag's version into package.json before publishing.
+#   4. Approve the staged publish on npmjs.com — the trusted publisher is
+#      stage-only, so nothing reaches the registry without that approval.
+#
+# If a guard below fails, the tag and release already exist (publishing is
+# what triggers this workflow): delete the release, then the tag, and redraft.
+# The published tarball's package.json differs from the tagged tree by exactly
+# the version field — the repo never carries a real version.
+
 name: Publish to npm
 
 on:
@@ -11,16 +31,67 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: pnpm/action-setup@v4
+      # Actions are pinned by commit SHA, not tag: this job holds the OIDC
+      # publish identity (id-token: write) and tags are mutable. Dependabot
+      # updates SHA pins the same as tags. pnpm's version comes from
+      # packageManager in package.json.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          version: 10.26.0
+          # Full history so the ancestor check below can see main.
+          fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      # A release can be drafted against any branch or commit; only code that
+      # went through a PR into main gets published.
+      - name: Require the tag to be on main
+        run: |
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::Release tag must point at a commit on main"
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.x'
           registry-url: 'https://registry.npmjs.org'
+
+      - name: Set version from tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          SEMVER='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          if [[ ! "$TAG" =~ $SEMVER ]]; then
+            echo "::error::Release tag '$TAG' must look like vX.Y.Z (no leading zeros)"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          # npm gives `latest` to whatever is published last, so a lower
+          # version would silently regress installs; only exact duplicates
+          # are rejected by the registry itself. Fall back to 0.0.0 only for
+          # a never-published package — anything else (network, 5xx) must
+          # fail the guard, not skip it.
+          NAME=$(node -p "require('./package.json').name")
+          # stderr goes to a file, not into the value: npm prints warnings on
+          # stderr even when the lookup succeeds (setup-node's npmrc triggers
+          # one), and they must not end up inside LATEST.
+          ERRFILE=$(mktemp)
+          if LATEST=$(npm view "$NAME" version 2>"$ERRFILE"); then
+            :
+          elif grep -q 'E404' "$ERRFILE"; then
+            LATEST=0.0.0
+          else
+            echo "::error::Could not determine the latest published version"
+            cat "$ERRFILE"
+            exit 1
+          fi
+          echo "Latest on npm: $LATEST"
+          if [ "$(printf '%s\n%s\n' "$LATEST" "$VERSION" | sort -V | tail -n1)" != "$VERSION" ] \
+            || [ "$VERSION" = "$LATEST" ]; then
+            echo "::error::Version $VERSION must be greater than $LATEST (latest on npm)"
+            exit 1
+          fi
+          npm pkg set version="$VERSION"
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
