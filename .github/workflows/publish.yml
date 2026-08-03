@@ -20,14 +20,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.x'
-          cache: 'pnpm'
           registry-url: 'https://registry.npmjs.org'
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm build
 
-      - run: pnpm publish --provenance --access public --no-git-checks
+      # The Node 22 line bundles npm 10.x; `npm stage` landed in npm 11.15.0.
+      - run: npm install --global npm@11.15.0
+
+      # Stage-only trusted publisher: `npm publish` is not an allowed action.
+      # This uploads the tarball and waits for a maintainer to approve it.
+      - run: npm stage publish
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RELEASE_MODE: 'true'
