@@ -1,5 +1,5 @@
 {
-	"name": "@leapter/n8n-nodes-leapter",
+	"name": "n8n-nodes-leapter",
 	"version": "0.0.0-development",
 	"description": "n8n community node for Leapter - execute AI blueprints and workflows dynamically via OpenAPI",
 	"license": "MIT",
