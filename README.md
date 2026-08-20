@@ -19,7 +19,11 @@ Leapter is an AI application platform that enables you to build, deploy, and man
 
 ## Installation
 
-Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) in the n8n community nodes documentation.
+Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) in the n8n community nodes documentation, using the package name `n8n-nodes-leapter`.
+
+> **Renamed in v0.1.4.** This package was previously published as `@leapter/n8n-nodes-leapter`,
+> which is now deprecated. Existing installations keep working but do not update automatically —
+> reinstall using the new name to receive further releases.
 
 ## Development Setup
 
