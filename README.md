@@ -2,7 +2,7 @@
 
 This is an n8n community node that lets you use [Leapter](https://leapter.com) in your n8n workflows.
 
-Leapter is an AI application platform that enables you to build, deploy, and manage AI blueprints. This node dynamically discovers and executes Leapter blueprints via OpenAPI specifications, providing a seamless integration between n8n workflows and Leapter's AI capabilities.
+Leapter is a decision logic platform: business rules live as visual, versioned **Blueprints**. You describe a rule in plain language and Leapter's AI agents draft the Blueprint for you — then humans review and approve it. At runtime, the approved Blueprint executes deterministically: the same input always produces the same output, with no LLM anywhere in the execution path. This node discovers your published Blueprints via their OpenAPI specifications and runs them from your workflow, either as a regular node or as a tool on an AI Agent.
 
 [n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/sustainable-use-license/) workflow automation platform.
 
