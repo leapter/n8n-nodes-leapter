@@ -102,7 +102,7 @@ Uses `httpRequestWithAuthentication()` which auto-injects `X-API-Key` header via
 - **Only POST endpoints** are parsed - Leapter runs are always POST to `/models/{id}/runs`
 - **resourceMapper** generates dynamic fields from OpenAPI schema properties
 - **Array fields** are passed as JSON strings in visual mode, parsed via `tryParseJson()`
-- **Response metadata**: Adds `_metadata.runId` (from `x-run-id` header) and `_metadata.editorLink`
+- **Response metadata**: Adds `_metadata.runId` (from `x-run-id` header) and `_metadata.editorLink` (the project's Lab link, `editorBaseUrl` from discovery; omitted when missing or the literal `'undefined'` in values saved before Lab sent it)
 - **$ref resolution**: `resolveSchema()` handles `#/components/schemas/...` references
 
 ## Gotchas

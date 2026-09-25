@@ -159,7 +159,7 @@ The node returns:
 - **Response data**: The blueprint execution results
 - **Metadata**:
   - `runId`: Unique identifier for the execution
-  - `editorLink`: Direct link to view the run in Leapter
+  - `editorLink`: Link to the project in Leapter (omitted when the Leapter server doesn't provide one)
 
 ### Error Handling
 

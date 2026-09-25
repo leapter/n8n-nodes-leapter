@@ -542,11 +542,7 @@ export class Leapter implements INodeType {
         };
 
         // Parse operation: method::path::operationUrl::editorBaseUrl::blueprintName
-        const [method, path, operationUrl, editorBaseUrl] = operation.split('::');
-
-        // Extract model ID from path for editor link
-        const modelIdMatch = path.match(/\/models\/([^/]+)\/runs/);
-        const modelId = modelIdMatch?.[1];
+        const [method, , operationUrl, editorBaseUrl] = operation.split('::');
 
         // Get parameters
         let bodyParams: IDataObject = {};
@@ -662,10 +658,9 @@ export class Leapter implements INodeType {
         // Extract runId from response header
         const runId = responseHeaders['x-run-id'] || responseHeaders['X-Run-Id'];
 
-        // Build editor link from stored editorBaseUrl and modelId
-        const editorLink = modelId
-          ? `${editorBaseUrl}/${modelId}`
-          : editorBaseUrl;
+        // editorBaseUrl links the whole project in Lab. Values saved against a
+        // Lab that did not send it hold the literal 'undefined'; omit the link then.
+        const hasEditorLink = !!editorBaseUrl && editorBaseUrl !== 'undefined';
 
         // Return output data with metadata
         returnData.push({
@@ -673,7 +668,7 @@ export class Leapter implements INodeType {
             ...responseBody,
             _metadata: {
               runId,
-              editorLink,
+              ...(hasEditorLink && { editorLink: editorBaseUrl }),
             },
           },
           pairedItem: { item: itemIndex },
