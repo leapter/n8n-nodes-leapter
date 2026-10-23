@@ -1,0 +1,36 @@
+{
+	"id": "leapterE2eFlow01",
+	"name": "Leapter e2e",
+	"active": false,
+	"nodes": [
+		{
+			"id": "9f6b1c2e-0001-4000-8000-000000000001",
+			"name": "Manual Trigger",
+			"type": "n8n-nodes-base.manualTrigger",
+			"typeVersion": 1,
+			"position": [0, 0],
+			"parameters": {}
+		},
+		{
+			"id": "9f6b1c2e-0001-4000-8000-000000000002",
+			"name": "Leapter",
+			"type": "CUSTOM.leapter",
+			"typeVersion": 1,
+			"position": [300, 0],
+			"parameters": {
+				"environment": "ENVIRONMENT",
+				"project": "ENVIRONMENT::APPLICATION",
+				"operation": "BLUEPRINT_ID",
+				"inputMode": "json",
+				"parametersJson": "INPUT_JSON"
+			},
+			"credentials": {
+				"leapterApi": { "id": "leapterE2eCred01", "name": "Leapter e2e" }
+			}
+		}
+	],
+	"connections": {
+		"Manual Trigger": { "main": [[{ "node": "Leapter", "type": "main", "index": 0 }]] }
+	},
+	"settings": {}
+}
