@@ -115,6 +115,11 @@ const CREDENTIAL_TYPE = 'leapterApi';
 const RETRY_INTERVAL_MS = 10_000;
 const MAX_RETRIES = 6;
 
+/**
+ * Id of the hidden placeholder field of a blueprint without inputs; never sent
+ */
+const NO_INPUTS_FIELD = '__leapter_no_inputs';
+
 function isActivating(error: unknown): boolean {
   const httpCode = (error as { httpCode?: string | null }).httpCode;
   return httpCode === '401' || httpCode === '404';
@@ -206,9 +211,25 @@ export class Leapter implements INodeType {
         displayOptions: {
           show: {
             project: [{ _cnd: { exists: true } }],
+            inputMode: ['visual'],
           },
           hide: {
             'parameters.schema': [{ _cnd: { exists: true } }],
+          },
+        },
+      },
+
+      // 4a. A blueprint without inputs: its schema holds only the hidden placeholder field
+      // (n8n shows emptyFieldsNotice only for an empty schema, so this notice says it instead)
+      {
+        displayName: 'This blueprint takes no inputs. Run it as it is.',
+        name: 'noInputsNotice',
+        type: 'notice',
+        default: '',
+        displayOptions: {
+          show: {
+            inputMode: ['visual'],
+            'parameters.schema[0].id': [NO_INPUTS_FIELD],
           },
         },
       },
@@ -456,8 +477,22 @@ export class Leapter implements INodeType {
           }
 
           if (fields.length === 0) {
-            // A run of such a blueprint sends {} as its body
-            return { fields, emptyFieldsNotice: 'This blueprint takes no inputs. Run it as it is.' };
+            // One hidden placeholder, so the schema has an entry: the activation notice hides (n8n
+            // ignores a hide rule on an empty list) and the no-inputs notice shows. execute() never
+            // sends it: only `body.` fields go into the body, so a run of such a blueprint sends {}.
+            return {
+              fields: [
+                {
+                  id: NO_INPUTS_FIELD,
+                  displayName: 'This blueprint takes no inputs',
+                  required: false,
+                  defaultMatch: false,
+                  display: false,
+                  type: 'string',
+                  canBeUsedToMatch: false,
+                },
+              ],
+            };
           }
           return { fields };
         } catch (error) {
@@ -514,7 +549,8 @@ export class Leapter implements INodeType {
           const paramValues = parameters.value || {};
 
           for (const [key, value] of Object.entries(paramValues)) {
-            if (key.startsWith('body.')) {
+            // Only blueprint inputs: never the no-inputs placeholder
+            if (key.startsWith('body.') && key !== NO_INPUTS_FIELD) {
               const paramName = key.replace('body.', '');
               // Try to parse JSON strings (for arrays and objects)
               const parsedValue = tryParseJson(value);
