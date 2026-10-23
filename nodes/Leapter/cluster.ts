@@ -1,6 +1,6 @@
 import type { IExecuteFunctions, ILoadOptionsFunctions, JsonObject } from 'n8n-workflow';
 import { NodeApiError, NodeOperationError } from 'n8n-workflow';
-import { clusterBaseUrl, isSecureAddress, parseKeyMap } from '../../credentials/eval-keys';
+import { clusterBaseUrl, currentKeys, isSecureAddress } from '../../credentials/eval-keys';
 
 type Context = IExecuteFunctions | ILoadOptionsFunctions;
 
@@ -39,7 +39,7 @@ export async function engineCredentialOptions(
   application: string,
 ): Promise<Parameters<IExecuteFunctions['helpers']['httpRequestWithAuthentication']>[2]> {
   const credentials = await ctx.getCredentials('leapterApi');
-  if (parseKeyMap(credentials.evalKeys)[`${environment}/${application}`]) {
+  if (currentKeys(credentials)[`${environment}/${application}`]) {
     return undefined;
   }
   // Honoured by n8n's request helper (2.44.5); not yet in n8n-workflow's published types

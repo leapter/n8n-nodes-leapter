@@ -10,19 +10,125 @@ import type {
 import {
   DEFAULT_CLUSTER_URL,
   GRACE_MS,
+  RECENT_USE_MS,
   clusterBaseUrl,
+  currentKeys,
   isSecureAddress,
-  lastRequested,
-  lastUsed,
-  parseKeyMap,
-  pending,
+  keyState,
 } from './eval-keys';
+import type { KeyState } from './eval-keys';
 
 function pathOf(url: string): string {
   try {
     return new URL(url).pathname;
   } catch {
     return url;
+  }
+}
+
+/**
+ * The work of preAuthentication: a key for every project requested without one, and a new key
+ * for every recently used project whose key the engine rejects
+ */
+async function refreshKeys(
+  ctx: IHttpRequestHelper,
+  credentials: ICredentialDataDecryptedObject,
+  state: KeyState,
+): Promise<IDataObject> {
+  const cluster = clusterBaseUrl(credentials.clusterUrl);
+  const authorization = `Bearer ${credentials.serviceKey as string}`;
+  const map = currentKeys(credentials);
+  const keysUrl = (project: string) => {
+    const [environment, application] = project.split('/');
+    return `${cluster}/runtime-management/environments/${environment}/applications/${application}/keys`;
+  };
+  const mint = async (project: string) => {
+    const answer = (await ctx.helpers.httpRequest({
+      method: 'POST',
+      url: keysUrl(project),
+      headers: { Authorization: authorization },
+      body: { reason: 'n8n node', usedBy: 'n8n' },
+      json: true,
+    })) as { key: string; credential: { id: string } };
+    map[project] = { id: answer.credential.id, key: answer.key, mintedAt: Date.now(), cluster };
+  };
+
+  // Only the requested project's refusal fails this request; another project's (gone, or an
+  // environment without rights) is not asked again until it is requested again
+  let refusal: unknown;
+  const attempt = async (project: string, work: () => Promise<void>) => {
+    try {
+      await work();
+    } catch (error) {
+      if (project === state.lastRequested) {
+        refusal = error;
+      }
+    }
+  };
+
+  for (const project of [...state.pending]) {
+    state.pending.delete(project);
+    if (!map[project]) {
+      await attempt(project, async () => await mint(project));
+    }
+  }
+
+  // A 401 does not say which request got it, and other projects' requests run meanwhile. So every
+  // recently used key past its grace period is probed, and only a key the engine rejects is
+  // replaced.
+  for (const [project, use] of state.used) {
+    const stored = map[project];
+    const now = Date.now();
+    if (!stored || now - use.at > RECENT_USE_MS || now - stored.mintedAt <= GRACE_MS) {
+      continue;
+    }
+    if (!(await isRejected(ctx, use.probeUrl, stored.key))) {
+      continue;
+    }
+    await attempt(project, async () => {
+      await mint(project);
+      try {
+        await ctx.helpers.httpRequest({
+          method: 'POST',
+          url: `${keysUrl(project)}/${stored.id}/revoke`,
+          headers: { Authorization: authorization },
+          body: { reason: 'n8n node: replaced' },
+          json: true,
+        });
+      } catch {
+        // The replacement works without it; the old key stays until revoked in the Admin UI
+      }
+    });
+  }
+
+  // Kept even when this call fails, so the keys it created are not lost
+  state.latest = map;
+  if (refusal !== undefined) {
+    throw refusal;
+  }
+  return { evalKeys: JSON.stringify(map) };
+}
+
+/**
+ * Whether the engine rejects the key (401). Any other answer, or none, keeps the key.
+ */
+async function isRejected(
+  ctx: IHttpRequestHelper,
+  probeUrl: string,
+  key: string,
+): Promise<boolean> {
+  try {
+    await ctx.helpers.httpRequest({
+      method: 'GET',
+      url: probeUrl,
+      headers: { 'X-API-Key': key },
+      json: true,
+      disableFollowRedirect: true,
+    });
+    return false;
+  } catch (error) {
+    const e = error as { httpCode?: string; response?: { status?: number } };
+    return (e.response?.status ?? Number(e.httpCode)) === 401;
   }
 }
 
@@ -104,13 +210,15 @@ export class LeapterApi implements ICredentialType {
       const match = path.match(/\/runtime\/api\/v1\/([^/]+)\/([^/]+)\//);
       if (match) {
         const project = `${match[1]}/${match[2]}`;
-        lastRequested.project = project;
-        const entry = parseKeyMap(credentials.evalKeys)[project];
+        const state = keyState(credentials);
+        state.lastRequested = project;
+        const entry = currentKeys(credentials)[project];
         if (entry) {
           headers['X-API-Key'] = entry.key;
-          lastUsed.set(project, { keyId: entry.id, at: Date.now() });
+          const probeUrl = `${url.slice(0, url.indexOf(match[0]) + match[0].length)}openapi`;
+          state.used.set(project, { at: Date.now(), probeUrl });
         } else {
-          pending.add(project);
+          state.pending.add(project);
         }
       }
     }
@@ -118,76 +226,19 @@ export class LeapterApi implements ICredentialType {
     return { ...requestOptions, headers };
   }
 
-  // Runs before the first request and after every 401: creates missing evaluation keys and
-  // replaces a rejected one. n8n stores the returned evalKeys in the credential.
+  // Runs before the first request, after every 401 and on every credential test: creates missing
+  // evaluation keys and replaces rejected ones. n8n stores the returned evalKeys in the credential.
+  // One call at a time per credential, so parallel requests neither create a key twice nor store
+  // an older map over a newer one.
   async preAuthentication(
     this: IHttpRequestHelper,
     credentials: ICredentialDataDecryptedObject,
   ): Promise<IDataObject> {
-    const clusterUrl = clusterBaseUrl(credentials.clusterUrl);
-    const authorization = `Bearer ${credentials.serviceKey as string}`;
-    const map = parseKeyMap(credentials.evalKeys);
-    const keysUrl = (project: string) => {
-      const [environment, application] = project.split('/');
-      return `${clusterUrl}/runtime-management/environments/${environment}/applications/${application}/keys`;
-    };
-    const mint = async (project: string) => {
-      const answer = (await this.helpers.httpRequest({
-        method: 'POST',
-        url: keysUrl(project),
-        headers: { Authorization: authorization },
-        body: { reason: 'n8n node', usedBy: 'n8n' },
-        json: true,
-      })) as { key: string; credential: { id: string } };
-      map[project] = { id: answer.credential.id, key: answer.key, mintedAt: Date.now() };
-    };
-
-    // Each project leaves the queue before its key is created, so a refusal (a project gone, an
-    // environment without rights) is not retried for every later request. Only the requested
-    // project's refusal fails this request.
-    let refusal: unknown;
-    for (const project of [...pending]) {
-      pending.delete(project);
-      if (map[project]) {
-        continue;
-      }
-      try {
-        await mint(project);
-      } catch (error) {
-        if (project === lastRequested.project) {
-          refusal = error;
-        }
-      }
-    }
-    if (refusal !== undefined) {
-      throw refusal;
-    }
-
-    // The refusal belongs to the request authenticated last. Replace that project's key only when
-    // it was sent, is past the grace period and is still the stored one; a keyless first use
-    // never touches another project's key.
-    const project = lastRequested.project;
-    const used = project ? lastUsed.get(project) : undefined;
-    if (project && used) {
-      const { keyId } = used;
-      const stored = map[project];
-      if (stored && stored.id === keyId && Date.now() - stored.mintedAt > GRACE_MS) {
-        await mint(project);
-        try {
-          await this.helpers.httpRequest({
-            method: 'POST',
-            url: `${keysUrl(project)}/${keyId}/revoke`,
-            headers: { Authorization: authorization },
-            body: { reason: 'n8n node: replaced' },
-            json: true,
-          });
-        } catch {
-          // The replacement works without it; the old key stays until revoked in the Admin UI
-        }
-      }
-    }
-
-    return { evalKeys: JSON.stringify(map) };
+    const state = keyState(credentials);
+    const run = async () => await refreshKeys(this, credentials, state);
+    const result = state.queue.then(run, run);
+    state.queue = result.catch(() => undefined);
+    return await result;
   }
 
   // A 2xx means the service key is live. The base URL drops a pasted Admin UI path, like
