@@ -194,7 +194,26 @@ export class Leapter implements INodeType {
         description: 'How to provide operation parameters',
       },
 
-      // 4. Visual Parameter Mapping (resourceMapper)
+      // 4. Activation notice: shown while a project is chosen and its fields are not loaded yet.
+      // n8n cannot show emptyFieldsNotice during a load, so this static notice explains the wait
+      // and hides itself once the resource mapper's schema has entries.
+      {
+        displayName:
+          'On first use, Leapter activates access to this project. This can take up to a minute; the fields load automatically.',
+        name: 'activationNotice',
+        type: 'notice',
+        default: '',
+        displayOptions: {
+          show: {
+            project: [{ _cnd: { exists: true } }],
+          },
+          hide: {
+            'parameters.schema': [{ _cnd: { exists: true } }],
+          },
+        },
+      },
+
+      // 4b. Visual Parameter Mapping (resourceMapper)
       {
         displayName: 'Parameters',
         name: 'parameters',
@@ -324,6 +343,9 @@ export class Leapter implements INodeType {
 
         try {
           const [environment, application] = projectValue.split('::');
+          // Pre-warm: one engine request now, so a missing key is created while the user still
+          // picks the blueprint. Not awaited; its result is ignored.
+          void prewarm(this, environment, application);
           const applications = await getApplications(this, environment);
           const callable =
             applications.find((entry) => entry.slug === application)?.callable ?? [];
@@ -617,6 +639,34 @@ async function getApplications(
   })) as StatusAnswer;
 
   return answer.environments?.[0]?.applications ?? [];
+}
+
+/**
+ * One engine request for the project through the credential: a refusal (401, or 404 while the
+ * credential has no key) makes the credential create the project's key
+ */
+async function prewarm(
+  ctx: ILoadOptionsFunctions,
+  environment: string,
+  application: string,
+): Promise<void> {
+  try {
+    const runBase = await readRunBase(ctx, await clusterUrlOf(ctx));
+    assertHttps(ctx, runBase);
+    await ctx.helpers.httpRequestWithAuthentication.call(
+      ctx,
+      CREDENTIAL_TYPE,
+      {
+        method: 'GET',
+        url: `${runBase}/runtime/api/v1/${environment}/${application}/openapi`,
+        json: true,
+        disableFollowRedirect: true,
+      },
+      await engineCredentialOptions(ctx, environment, application),
+    );
+  } catch {
+    // Ignored: the field list asks again and reports problems itself
+  }
 }
 
 /**
