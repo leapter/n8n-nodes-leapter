@@ -28,6 +28,7 @@ const N8N_PORT = env('E2E_N8N_PORT', '5691');
 const OUT = env('DEMO_OUT', join(HERE, 'recordings'));
 
 const N8N = `http://localhost:${N8N_PORT}`;
+const DEFAULT_CLUSTER_URL = 'https://runtime.leapter.com';
 const ADMIN_UI = `${CLUSTER_URL}/runtime-management/ui/`;
 const N8N_OWNER = { emailOrLdapLoginId: 'e2e@leapter.test', password: 'e2e-Owner-Pass-1' };
 const VIEWPORT = { width: 1280, height: 720 };
@@ -253,6 +254,7 @@ async function record(browser, labState, serviceKey) {
 	const page = await context.newPage();
 	const videoStart = Date.now();
 	const marks = [];
+	const extras = [];
 	let caption = '';
 	page.on('load', () => void setCaption(page, caption));
 
@@ -295,12 +297,18 @@ async function record(browser, labState, serviceKey) {
 		await page.keyboard.type('Leapter', { delay: 90 });
 		await page.getByRole('option', { name: 'Leapter API' }).click();
 		await page.locator(N('new-credential-type-button')).click();
-		const clusterUrl = page.locator(N('parameter-input-clusterUrl')).locator('input');
-		await clusterUrl.fill('');
-		await clusterUrl.pressSequentially(CLUSTER_URL, { delay: 70 });
-		await sleep(400);
 		// Pasted, as a user would
 		await page.locator(N('parameter-input-serviceKey')).locator('input').fill(serviceKey);
+		await sleep(800);
+		// Advanced Settings shows the default server; a local cluster has to replace it
+		await page.locator(N('parameter-input-showAdvanced')).locator('.el-switch, [role="switch"]').first().click();
+		const clusterUrl = page.locator(N('parameter-input-clusterUrl')).locator('input');
+		await clusterUrl.waitFor();
+		await sleep(1_800);
+		if (CLUSTER_URL !== DEFAULT_CLUSTER_URL) {
+			await clusterUrl.fill('');
+			await clusterUrl.pressSequentially(CLUSTER_URL, { delay: 70 });
+		}
 		await page.keyboard.press('Tab');
 		await sleep(700);
 		await page.locator(N('credential-save-button')).click();
@@ -344,19 +352,29 @@ async function record(browser, labState, serviceKey) {
 			await option.click();
 			await sleep(800);
 		};
-		await pick('environment', ENVIRONMENT);
+		// One environment: the project is listed by its slug; several: "environment · slug"
 		await pick('project', APPLICATION);
 		await pick('operation', /./);
-		// A new project key answers 401 until the engines pick it up; n8n shows "Retry" meanwhile
+		// A new project key answers 401 until the engines pick it up; the node says so in the
+		// field list's notice, and n8n's "Retry" loads the list again
+		const firstField = mapper.locator(N(`parameter-input-body.${Object.keys(DEMO_INPUT)[0]}`));
+		const notice = page.locator(N('empty-fields-notice'));
+		await Promise.race([notice.waitFor({ timeout: 30_000 }), firstField.waitFor({ timeout: 30_000 })]);
+		if (await notice.isVisible()) {
+			const text = (await notice.innerText()).trim();
+			if (!text.includes('is being activated')) throw new Error(`Unexpected notice: ${text}`);
+			extras.push({ name: 'activation-notice', at: (Date.now() - videoStart) / 1000, text });
+			log(`notice: ${text}`);
+		}
 		const started = Date.now();
-		await sleep(2_000);
-		while (await mapper.getByText('No parameters found').count()) {
+		while (!(await firstField.isVisible())) {
 			if (Date.now() - started > 90_000) throw new Error('The blueprint fields did not load within 90 s.');
 			await sleep(4_000);
-			await mapper.getByText('Retry').click();
+			const retry = mapper.getByText('Retry', { exact: true });
+			if (!(await retry.count())) throw new Error('The field list shows no Retry to load it again.');
+			await retry.first().click();
 			await sleep(1_500);
 		}
-		await mapper.locator(N(`parameter-input-body.${Object.keys(DEMO_INPUT)[0]}`)).waitFor();
 		await sleep(1_500);
 	});
 
@@ -438,7 +456,7 @@ async function record(browser, labState, serviceKey) {
 	const video = page.video();
 	await context.close();
 	const raw = await video.path();
-	return { raw, marks, runId };
+	return { raw, marks, extras, runId };
 }
 
 // --- Trim and check -------------------------------------------------------------------------
@@ -457,20 +475,21 @@ function playwrightFfmpeg() {
 	return join(cache, dir, binary);
 }
 
-function trim(raw, marks) {
+function trim(raw, marks, extras) {
 	const start = Math.max(0, marks[0].at - 0.3);
 	execFileSync(
 		playwrightFfmpeg(),
 		['-y', '-ss', start.toFixed(2), '-i', raw, '-c:v', 'libvpx', '-b:v', '3M', '-crf', '10', VIDEO],
 		{ stdio: 'ignore' },
 	);
-	return marks.map((mark) => ({ ...mark, at: Number((mark.at - start).toFixed(2)) }));
+	const shift = (entry) => ({ ...entry, at: Number((entry.at - start).toFixed(2)) });
+	return { captions: marks.map(shift), extras: extras.map(shift) };
 }
 
 // Plays the video in headless Chromium and screenshots one frame per caption as currentTime
 // passes its mark: 1.2 s before the next caption, so the frame shows what the step achieved
 async function verify(browser) {
-	const marks = JSON.parse(readFileSync(MARKS, 'utf8'));
+	const { captions: marks, extras = [] } = JSON.parse(readFileSync(MARKS, 'utf8'));
 	const page = await browser.newPage({ viewport: VIEWPORT });
 	const html = join(OUT, 'verify.html');
 	writeFileSync(html, `<body style="margin:0;background:#000"><video id="v" muted src="${pathToFileURL(VIDEO)}" width="1280" height="720"></video></body>`);
@@ -501,6 +520,18 @@ async function verify(browser) {
 		stills.push({ caption: mark.caption, mark: mark.at, frame: Number(shown.toFixed(2)), still });
 		await page.evaluate(() => document.getElementById('v').play());
 	}
+	// Stills of moments within a caption, e.g. the activation notice
+	for (const extra of extras) {
+		await page.evaluate((time) => {
+			const video = document.getElementById('v');
+			video.pause();
+			video.currentTime = time;
+			return new Promise((done) => video.addEventListener('seeked', done, { once: true }));
+		}, extra.at + 1.0);
+		const still = join(OUT, `${extra.name}.png`);
+		await page.locator('#v').screenshot({ path: still });
+		stills.push({ caption: extra.name, mark: extra.at, frame: extra.at + 1.0, still, extra: true });
+	}
 	await page.close();
 	rmSync(html);
 
@@ -508,7 +539,11 @@ async function verify(browser) {
 	const gaps = marks.map((mark, index) => (marks[index + 1]?.at ?? duration) - mark.at);
 	console.log(`\nVideo: ${VIDEO}\nLength: ${duration.toFixed(1)} s`);
 	for (const [index, entry] of stills.entries()) {
-		console.log(`  ${index + 1}. ${entry.mark.toFixed(1)} s (${gaps[index].toFixed(1)} s) "${entry.caption}" -> ${entry.still}`);
+		console.log(
+			entry.extra
+				? `  +  ${entry.mark.toFixed(1)} s ${entry.caption} -> ${entry.still}`
+				: `  ${index + 1}. ${entry.mark.toFixed(1)} s (${gaps[index].toFixed(1)} s) "${entry.caption}" -> ${entry.still}`,
+		);
 	}
 	const problems = [];
 	if (!(duration >= 60 && duration <= MAX_LENGTH_S)) problems.push(`length ${duration.toFixed(1)} s is outside 60-120 s`);
@@ -543,8 +578,8 @@ async function main() {
 			service = prepareServiceKey();
 			log('n8n: starting');
 			await startN8n();
-			const { raw, marks, runId } = await record(browser, labState, service.key);
-			writeFileSync(MARKS, JSON.stringify(trim(raw, marks), null, 2));
+			const { raw, marks, extras, runId } = await record(browser, labState, service.key);
+			writeFileSync(MARKS, JSON.stringify(trim(raw, marks, extras), null, 2));
 			log(`recorded run ${runId}`);
 			await verify(browser);
 		} finally {

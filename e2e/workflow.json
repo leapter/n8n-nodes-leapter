@@ -18,7 +18,6 @@
 			"typeVersion": 1,
 			"position": [300, 0],
 			"parameters": {
-				"environment": "ENVIRONMENT",
 				"project": "ENVIRONMENT::APPLICATION",
 				"operation": "BLUEPRINT_ID",
 				"inputMode": "json",

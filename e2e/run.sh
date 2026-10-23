@@ -152,10 +152,10 @@ compose up -d >/dev/null 2>&1 || fail 'setup: docker compose up failed'
 wait_for_n8n
 
 jq -n --arg id "$CREDENTIAL_ID" --arg url "$CLUSTER_URL" --arg key "$SERVICE_KEY" \
-	'[{id: $id, name: "Leapter e2e", type: "leapterApi", data: {clusterUrl: $url, serviceKey: $key}}]' \
+	'[{id: $id, name: "Leapter e2e", type: "leapterApi", data: {serviceKey: $key, showAdvanced: true, clusterUrl: $url}}]' \
 	>"$WORK/credential.json"
 jq --arg env "$ENVIRONMENT" --arg app "$APPLICATION" --arg id "$BLUEPRINT_ID" --arg input "$INPUT_JSON" \
-	'.nodes[1].parameters += {environment: $env, project: "\($env)::\($app)", operation: $id, parametersJson: $input}' \
+	'.nodes[1].parameters += {project: "\($env)::\($app)", operation: $id, parametersJson: $input}' \
 	"$HERE/workflow.json" >"$WORK/workflow.json"
 compose exec -T n8n sh -c 'cat > /tmp/credential.json && n8n import:credentials --input=/tmp/credential.json' \
 	<"$WORK/credential.json" >/dev/null 2>&1 || fail 'setup: n8n import:credentials failed'

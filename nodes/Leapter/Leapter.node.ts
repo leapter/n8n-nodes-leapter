@@ -129,28 +129,15 @@ export class Leapter implements INodeType {
       },
     ],
     properties: [
-      // 1. Environment Dropdown (loaded from the control plane)
-      {
-        displayName: 'Environment Name or ID',
-        name: 'environment',
-        type: 'options',
-        typeOptions: {
-          loadOptionsMethod: 'getEnvironments',
-        },
-        default: '',
-        required: true,
-        noDataExpression: true,
-        description: 'The Runtime Cluster environment the project is deployed in. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
-      },
-
-      // 2. Project Dropdown (deployed projects with public blueprints, depends on environment)
+      // 1. Project Dropdown (deployed projects with public blueprints, in every environment the
+      // service key reaches)
       {
         displayName: 'Project Name or ID',
         name: 'project',
         type: 'options',
         typeOptions: {
           loadOptionsMethod: 'getProjects',
-          loadOptionsDependsOn: ['environment'],
+          loadOptionsDependsOn: [],
         },
         default: '',
         required: true,
@@ -158,7 +145,7 @@ export class Leapter implements INodeType {
         description: 'The Leapter project containing your blueprints. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
       },
 
-      // 3. Blueprint Dropdown (the project's public blueprints, depends on project)
+      // 2. Blueprint Dropdown (the project's public blueprints, depends on project)
       {
         displayName: 'Blueprint Name or ID',
         name: 'operation',
@@ -173,7 +160,7 @@ export class Leapter implements INodeType {
         description: 'The blueprint operation to execute. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
       },
 
-      // 4. Input Mode Toggle
+      // 3. Input Mode Toggle
       {
         displayName: 'Input Mode',
         name: 'inputMode',
@@ -194,7 +181,7 @@ export class Leapter implements INodeType {
         description: 'How to provide operation parameters',
       },
 
-      // 5. Visual Parameter Mapping (resourceMapper)
+      // 4. Visual Parameter Mapping (resourceMapper)
       {
         displayName: 'Parameters',
         name: 'parameters',
@@ -226,7 +213,7 @@ export class Leapter implements INodeType {
         description: 'Map input data to operation parameters',
       },
 
-      // 6. JSON Input (fallback for complex schemas)
+      // 5. JSON Input (fallback for complex schemas)
       {
         displayName: 'Parameters (JSON)',
         name: 'parametersJson',
@@ -243,7 +230,7 @@ export class Leapter implements INodeType {
         hint: 'Use this for complex nested objects or advanced use cases',
       },
 
-      // 7. Additional Options
+      // 6. Additional Options
       {
         displayName: 'Options',
         name: 'options',
@@ -267,9 +254,10 @@ export class Leapter implements INodeType {
   methods = {
     loadOptions: {
       /**
-       * Lists the environments the service key may reach
+       * Lists the deployed projects with public blueprints in every environment the service key
+       * reaches
        */
-      async getEnvironments(
+      async getProjects(
         this: ILoadOptionsFunctions,
       ): Promise<INodePropertyOptions[]> {
         try {
@@ -284,39 +272,24 @@ export class Leapter implements INodeType {
               disableFollowRedirect: true,
             },
           )) as EnvironmentsAnswer;
+          const environments = (answer.environments ?? []).map((environment) => environment.slug);
 
-          return (answer.environments ?? []).map((environment) => ({
-            name: environment.slug,
-            value: environment.slug,
-          }));
-        } catch (error) {
-          throw clusterError(this, error, 'Failed to load environments');
-        }
-      },
-
-      /**
-       * Lists the environment's deployed projects that have public blueprints
-       */
-      async getProjects(
-        this: ILoadOptionsFunctions,
-      ): Promise<INodePropertyOptions[]> {
-        const environment = this.getNodeParameter('environment') as string;
-
-        if (!environment) {
-          return [];
-        }
-
-        try {
-          const applications = await getApplications(this, environment);
-
-          // Value format: environment::application
-          return applications
-            .filter((application) => application.callable?.length > 0)
-            .map((application) => ({
-              name: application.slug,
-              value: `${environment}::${application.slug}`,
-            }))
-            .sort((a, b) => a.name.localeCompare(b.name));
+          const options: INodePropertyOptions[] = [];
+          for (const environment of environments) {
+            for (const application of await getApplications(this, environment)) {
+              if (!application.callable?.length) continue;
+              // Value format: environment::application; the environment is named only when the
+              // key reaches more than one
+              options.push({
+                name:
+                  environments.length === 1
+                    ? application.slug
+                    : `${environment} · ${application.slug}`,
+                value: `${environment}::${application.slug}`,
+              });
+            }
+          }
+          return options.sort((a, b) => a.name.localeCompare(b.name));
         } catch (error) {
           throw clusterError(this, error, 'Failed to load projects');
         }
@@ -367,6 +340,13 @@ export class Leapter implements INodeType {
 
         const [environment, application] = projectValue.split('::');
         const spec = await getOpenApiSpec(this, environment, application);
+        if (spec === null) {
+          // n8n shows this notice; it does not show errors thrown here
+          return {
+            fields,
+            emptyFieldsNotice: `Access to ${application} is being activated, which takes up to a minute. Click Retry in a moment.`,
+          };
+        }
 
         try {
           const path = `/models/${blueprintId}/runs`;
@@ -438,6 +418,10 @@ export class Leapter implements INodeType {
             }
           }
 
+          if (fields.length === 0) {
+            // A run of such a blueprint sends {} as its body
+            return { fields, emptyFieldsNotice: 'This blueprint takes no inputs. Run it as it is.' };
+          }
           return { fields };
         } catch (error) {
           const err = error as Error;
@@ -614,15 +598,15 @@ async function getApplications(
 }
 
 /**
- * The project's OpenAPI document from the engine. This request gets the project's evaluation
- * key from the credential; the first 401 makes the credential create it, so the key exists
- * before the workflow first runs.
+ * The project's OpenAPI document from the engine, or null while access is being activated
+ * (401 or 404). This request gets the project's evaluation key from the credential; the first
+ * 401 makes the credential create it, so the key exists before the workflow first runs.
  */
 async function getOpenApiSpec(
   ctx: ILoadOptionsFunctions,
   environment: string,
   application: string,
-): Promise<OpenAPISpec> {
+): Promise<OpenAPISpec | null> {
   const runBase = await readRunBase(ctx, await clusterUrlOf(ctx));
   assertHttps(ctx, runBase);
 
@@ -636,10 +620,7 @@ async function getOpenApiSpec(
   } catch (error) {
     const httpCode = (error as { httpCode?: string | null }).httpCode;
     if (httpCode === '401' || httpCode === '404') {
-      throw new NodeOperationError(
-        ctx.getNode(),
-        `Access to ${application} is being activated, which takes up to a minute. Reopen this list in a moment.`,
-      );
+      return null;
     }
     throw clusterError(ctx, error, 'Failed to load the blueprint fields');
   }

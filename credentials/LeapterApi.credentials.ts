@@ -9,6 +9,12 @@ import type {
 } from 'n8n-workflow';
 import { GRACE_MS, lastUsed, parseKeyMap, pending } from './eval-keys';
 
+/**
+ * Leapter's hosted cluster. n8n leaves `clusterUrl` out of the credential data while Advanced
+ * Settings is off, so every reader falls back to this (also in nodes/Leapter/cluster.ts).
+ */
+const DEFAULT_CLUSTER_URL = 'https://runtime.leapter.com';
+
 function pathOf(url: string): string {
   try {
     return new URL(url).pathname;
@@ -31,15 +37,6 @@ export class LeapterApi implements ICredentialType {
 
   properties: INodeProperties[] = [
     {
-      displayName: 'Cluster URL',
-      name: 'clusterUrl',
-      type: 'string',
-      default: 'https://runtime.leapter.com',
-      required: true,
-      description:
-        "Your Runtime Cluster's address: the Admin UI's address without /runtime-management/ui. Keep the default for Leapter's hosted cluster.",
-    },
-    {
       displayName: 'Service Key',
       name: 'serviceKey',
       type: 'string',
@@ -49,6 +46,26 @@ export class LeapterApi implements ICredentialType {
       description:
         'A key of the n8n service account. Create it in the Admin UI: Service accounts → n8n → Create key.',
       hint: 'Starts with lk_mgmt_',
+    },
+    {
+      displayName: 'Advanced Settings',
+      name: 'showAdvanced',
+      type: 'boolean',
+      default: false,
+      description: 'Whether to show advanced settings like the server URL',
+    },
+    {
+      displayName: 'Leapter Server',
+      name: 'clusterUrl',
+      type: 'string',
+      default: DEFAULT_CLUSTER_URL,
+      description:
+        'The Leapter Runtime Cluster. Only change for self-hosted clusters or development.',
+      displayOptions: {
+        show: {
+          showAdvanced: [true],
+        },
+      },
     },
     {
       displayName: 'Evaluation Keys',
@@ -96,7 +113,7 @@ export class LeapterApi implements ICredentialType {
     this: IHttpRequestHelper,
     credentials: ICredentialDataDecryptedObject,
   ): Promise<IDataObject> {
-    const clusterUrl = (credentials.clusterUrl as string).replace(/\/+$/, '');
+    const clusterUrl = String(credentials.clusterUrl || DEFAULT_CLUSTER_URL).replace(/\/+$/, '');
     const authorization = `Bearer ${credentials.serviceKey as string}`;
     const map = parseKeyMap(credentials.evalKeys);
     const keysUrl = (project: string) => {
@@ -150,7 +167,7 @@ export class LeapterApi implements ICredentialType {
   test: ICredentialTestRequest = {
     request: {
       method: 'GET',
-      baseURL: '={{$credentials.clusterUrl}}',
+      baseURL: `={{$credentials.clusterUrl || "${DEFAULT_CLUSTER_URL}"}}`,
       url: '/runtime-management/environments',
     },
   };

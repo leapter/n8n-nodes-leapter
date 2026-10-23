@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 ## What This Is
-n8n community node that dynamically discovers and executes Leapter blueprints deployed to a Leapter Runtime Cluster. It reads the cluster's environments, projects and blueprints to populate dropdowns and each project's OpenAPI document to generate input fields - no hardcoded operations.
+n8n community node that dynamically discovers and executes Leapter blueprints deployed to a Leapter Runtime Cluster. It reads the projects and blueprints the service key reaches to populate dropdowns and each project's OpenAPI document to generate input fields - no hardcoded operations.
 
 ## Core Technologies
 - **TypeScript** (strict mode) - All source code
@@ -80,14 +80,13 @@ Releases are cut from the GitHub Releases UI (draft a release with a `vX.Y.Z` ta
 
 ### Data Flow
 ```
-User selects environment (GET {cp}/environments) → project (GET {cp}/environments/{env}/status, applications with callable blueprints)
+User selects project (GET {cp}/environments, then GET {cp}/environments/{env}/status for each: applications with callable blueprints)
 → blueprint (callable[] of that application) → input fields from the engine's OpenAPI document
 → Execute POST {runBase}/runtime/api/v1/{env}/{app}/models/{blueprintId}/runs
 ```
 `{cp}` is `{clusterUrl}/runtime-management`. `{runBase}` is read once per execution by `readRunBase()` (`nodes/Leapter/cluster.ts`).
 
 ### Saved Parameter Values
-- **Environment**: the environment slug
 - **Project**: `environment::application` (application slug)
 - **Operation**: the blueprint id from `status` (`callable[].id`)
 
@@ -115,7 +114,8 @@ All requests use `disableFollowRedirect: true`; `assertHttps()` refuses non-http
 ## Key Implementation Details
 
 - **Only the POST `/models/{id}/runs` path** of the OpenAPI document is read, for the selected blueprint id; the document's `servers` are never used
-- **resourceMapper** generates dynamic fields from OpenAPI schema properties
+- **resourceMapper** generates dynamic fields from OpenAPI schema properties. n8n 2.44.5 does not show errors thrown by `getOperationFields`, so it answers with `emptyFieldsNotice` instead: while the project's key activates (401/404) and for a blueprint without inputs
+- **Credential**: `clusterUrl` (display name "Leapter Server") is shown only under `showAdvanced`; its default is `https://runtime.leapter.com`
 - **Array fields** are passed as JSON strings in visual mode, parsed via `tryParseJson()`
 - **Response metadata**: Adds `_metadata.runId` (from `x-run-id` header); requests send the n8n execution ID as `X-Correlation-Id`
 - **$ref resolution**: `resolveSchema()` handles `#/components/schemas/...` references
