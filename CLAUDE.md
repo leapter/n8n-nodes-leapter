@@ -17,7 +17,11 @@ pnpm build            # Compile TypeScript to dist/
 pnpm lint             # Check for lint errors
 pnpm lint:fix         # Auto-fix lint errors
 pnpm dev              # Start dev mode with n8n
+pnpm test             # Unit tests (node:test, test/*.test.mjs)
+pnpm e2e              # n8n in Docker against a Runtime Cluster (e2e/README.md)
 ```
+
+Against a local cluster from a host-run n8n (`pnpm dev`), start it as `NODE_OPTIONS=--dns-result-order=ipv4first pnpm dev`: the cluster names its run address `http://localhost:3003`, that port listens on IPv4 only, and n8n's HTTP client does not fall back from `::1`.
 
 Releases are cut from the GitHub Releases UI (draft a release with a `vX.Y.Z` tag, publish it). `publish.yml` derives the npm version from the tag; the `version` in `package.json` is a permanent placeholder — never bump it.
 
@@ -26,6 +30,7 @@ Releases are cut from the GitHub Releases UI (draft a release with a `vX.Y.Z` ta
 ├── nodes/Leapter/
 │   ├── Leapter.node.ts    # Main node implementation
 │   ├── cluster.ts         # Run base, https check, cluster error messages
+│   ├── newest-load.ts     # Overlapping field loads answer with the newest one's result
 │   ├── Leapter.node.json  # Node metadata for n8n
 │   └── leapter.svg        # Node icon
 ├── credentials/
@@ -119,6 +124,8 @@ All requests use `disableFollowRedirect: true`; `assertHttps()` refuses non-http
   - `activationNotice` (type `notice`, above the resource mapper) explains the wait. Shown when a project is set in Visual Mapping, hidden once `parameters.schema` has entries (displayOptions read the path with lodash `get`).
   - `getOperationFields` waits for an activating key itself (10 s × 6). Only then does it return `emptyFieldsNotice` (with n8n's Retry) as the fallback.
   - A blueprint without inputs gets one hidden placeholder field `__leapter_no_inputs` (`display: false`). n8n ignores a hide rule on an empty list, so without it the activation notice would stay. `noInputsNotice` shows when `parameters.schema[0].id` is the placeholder; `execute` sends only `body.` fields, so the placeholder is never sent.
+  - n8n never cancels a field request; the editor ends its loading state with the first answer and keeps the last. So all field loads of one caller (the n8n user and the credential, `fieldLoadCaller()`) go through `newestLoad()`: a superseded load stops its retries and answers with the newest load's result. n8n gives a loader no node or workflow identity (it runs as "Temp-Node"), and the user id is read from the context's `additionalData`, which is not node API; without it every load answers for itself.
+  - Before waiting, `getOperationFields` checks that the blueprint is one of the project's (`/status`): after a project switch n8n asks once with the old blueprint, and that answers an empty list at once.
   - `getOperations` pre-warms the project's key: one engine request through the credential, not awaited, so a missing key is created while the user picks the blueprint.
 - **Credential**: `clusterUrl` (display name "Leapter Server") is shown only under `showAdvanced`; its default is `https://runtime.leapter.com`
 - **Array fields** are passed as JSON strings in visual mode, parsed via `tryParseJson()`

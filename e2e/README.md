@@ -10,8 +10,9 @@ extension, and checks the whole flow against a real Runtime Cluster. Run it befo
 | C3 second run | Succeeds with the same key |
 | C4 restart | After `docker compose restart`, succeeds with the same key |
 | C5 revoked key | After revoking the key and waiting 65 s, succeeds within 120 s with a new key |
+| C6 overlapping field loads | Through a second credential without a key: a field load waiting for the new key, overtaken by one for a blueprint the project lacks, answers with the newer (empty) result within 20 s; the newer one within 10 s; then the blueprint's fields load |
 
-The script stops at the first `FAIL`. It always revokes the key it left and removes n8n with
+The script stops at the first `FAIL`. It always revokes the keys it left and removes n8n with
 `docker compose down -v` (set `E2E_KEEP=1` to keep both for debugging).
 
 ## Inputs

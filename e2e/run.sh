@@ -9,7 +9,8 @@ Usage: pnpm e2e            (or: bash e2e/run.sh)
 
 Runs n8n 2.44.5 in Docker with this repository's build and checks against a Runtime Cluster:
   C1 credential test, C2 first run (one key created), C3 second run (same key),
-  C4 run after an n8n restart (same key), C5 run after the key was revoked (new key).
+  C4 run after an n8n restart (same key), C5 run after the key was revoked (new key),
+  C6 overlapping field loads answer with the newest one's result.
 
 Inputs (environment variables, all required):
   CLUSTER_URL    The cluster's address, e.g. http://localhost:3002 or https://dev.runtime.leapter.com
@@ -44,6 +45,8 @@ CLUSTER_URL=${CLUSTER_URL%/}
 export N8N_PORT=${E2E_N8N_PORT:-5691}
 N8N=http://localhost:$N8N_PORT
 CREDENTIAL_ID=leapterE2eCred01
+# C6's own credential: it holds no key yet, so its first field load waits for one to activate
+FIELDS_CREDENTIAL_ID=leapterE2eCred02
 WORKFLOW_ID=leapterE2eFlow01
 KEY_PATH=$ENVIRONMENT/$APPLICATION
 OWNER_LOGIN='{"emailOrLdapLoginId": "e2e@leapter.test", "password": "e2e-Owner-Pass-1"}'
@@ -90,14 +93,16 @@ cleanup() {
 	if [[ -n ${E2E_KEEP:-} ]]; then
 		echo "E2E_KEEP: n8n stays at $N8N; key ${KEY_ID:-none} stays active"
 	else
-		KEY_ID=$(stored_key_id 2>/dev/null || true)
-		if [[ -n $KEY_ID ]]; then
-			if revoke "$KEY_ID" 'n8n node e2e: cleanup'; then
-				echo "cleanup: revoked key $KEY_ID"
-			else
-				echo "cleanup: could not revoke key $KEY_ID; revoke it in the Admin UI"
+		for credential in "$CREDENTIAL_ID" "$FIELDS_CREDENTIAL_ID"; do
+			KEY_ID=$(stored_key_id "$credential" 2>/dev/null || true)
+			if [[ -n $KEY_ID ]]; then
+				if revoke "$KEY_ID" 'n8n node e2e: cleanup'; then
+					echo "cleanup: revoked key $KEY_ID"
+				else
+					echo "cleanup: could not revoke key $KEY_ID; revoke it in the Admin UI"
+				fi
 			fi
-		fi
+		done
 		compose down -v >/dev/null 2>&1 || true
 		echo 'cleanup: n8n removed'
 	fi
@@ -119,14 +124,26 @@ login() {
 		-d "$OWNER_LOGIN" >/dev/null || fail 'setup: owner login failed'
 }
 
-# The evaluation key map the credential stores, as JSON ({} when empty)
+# The evaluation key map a credential stores (default: the workflow's), as JSON ({} when empty)
 stored_keys() {
-	curl -sf -b "$WORK/cookies" "$N8N/rest/credentials/$CREDENTIAL_ID?includeData=true" |
+	curl -sf -b "$WORK/cookies" "$N8N/rest/credentials/${1:-$CREDENTIAL_ID}?includeData=true" |
 		jq -c '.data.data.evalKeys // "" | if . == "" then {} else fromjson end'
 }
 
 stored_key_id() {
-	stored_keys | jq -r --arg path "$KEY_PATH" '.[$path].id // empty'
+	stored_keys "${1:-}" | jq -r --arg path "$KEY_PATH" '.[$path].id // empty'
+}
+
+# The editor's field list request for a blueprint, through C6's credential; prints the answer
+load_fields() {
+	curl -s -b "$WORK/cookies" -X POST "$N8N/rest/dynamic-node-parameters/resource-mapper-fields" \
+		-H 'Content-Type: application/json' \
+		-d "$(jq -nc --arg project "$ENVIRONMENT::$APPLICATION" --arg blueprint "$1" --arg credential "$FIELDS_CREDENTIAL_ID" \
+			'{nodeTypeAndVersion: {name: "CUSTOM.leapter", version: 1}, path: "parameters",
+				methodName: "getOperationFields",
+				currentNodeParameters: {project: $project, operation: $blueprint, inputMode: "visual",
+					parameters: {mappingMode: "defineBelow", value: null}},
+				credentials: {leapterApi: {id: $credential, name: "Leapter e2e fields"}}}')"
 }
 
 # Runs the workflow with the n8n CLI; prints the Leapter node's output item, fails on an error
@@ -151,8 +168,9 @@ compose down -v >/dev/null 2>&1 || true
 compose up -d >/dev/null 2>&1 || fail 'setup: docker compose up failed'
 wait_for_n8n
 
-jq -n --arg id "$CREDENTIAL_ID" --arg url "$CLUSTER_URL" --arg key "$SERVICE_KEY" \
-	'[{id: $id, name: "Leapter e2e", type: "leapterApi", data: {serviceKey: $key, showAdvanced: true, clusterUrl: $url}}]' \
+jq -n --arg id "$CREDENTIAL_ID" --arg fields "$FIELDS_CREDENTIAL_ID" --arg url "$CLUSTER_URL" --arg key "$SERVICE_KEY" \
+	'[{id: $id, name: "Leapter e2e", type: "leapterApi", data: {serviceKey: $key, showAdvanced: true, clusterUrl: $url}},
+		{id: $fields, name: "Leapter e2e fields", type: "leapterApi", data: {serviceKey: $key, showAdvanced: true, clusterUrl: $url}}]' \
 	>"$WORK/credential.json"
 jq --arg env "$ENVIRONMENT" --arg app "$APPLICATION" --arg id "$BLUEPRINT_ID" --arg input "$INPUT_JSON" \
 	'.nodes[1].parameters += {project: "\($env)::\($app)", operation: $id, parametersJson: $input}' \
@@ -230,6 +248,30 @@ if jq -e '.outputData' <<<"$output" >/dev/null && ((elapsed <= 120)) && [[ -n $i
 	KEY_ID=$id
 else
 	fail "C5 revoked key (${elapsed} s): output $output; key id $id, was $KEY_ID"
+fi
+
+# --- C6 overlapping field loads ------------------------------------------------------------
+
+# The editor never cancels a field request. A load waiting for a new key is overtaken by a newer
+# one (here: a blueprint the project does not have, as after a project switch): the newer one
+# answers at once, and the older one stops waiting and answers with the newer result.
+started=$SECONDS
+load_fields "$BLUEPRINT_ID" >"$WORK/older.json" &
+older_pid=$!
+sleep 3
+newer=$(load_fields not-a-blueprint)
+newer_s=$((SECONDS - started))
+wait "$older_pid"
+older_s=$((SECONDS - started))
+older=$(jq -c '.data' "$WORK/older.json")
+# Then the blueprint again: its fields, once the key is active
+fields=$(load_fields "$BLUEPRINT_ID")
+if [[ $(jq -c '.data' <<<"$newer") == '{"fields":[]}' ]] && ((newer_s <= 10)) &&
+	[[ $older == '{"fields":[]}' ]] && ((older_s <= 20)) &&
+	jq -e '.data.fields | length > 0' <<<"$fields" >/dev/null; then
+	pass "C6 overlapping field loads: newer answered after ${newer_s} s, older after ${older_s} s with the newer result; then $(jq -c '.data.fields | map(.id)' <<<"$fields")"
+else
+	fail "C6 overlapping field loads: newer ($newer_s s) $newer; older ($older_s s) $older; then $fields"
 fi
 
 echo 'All checks passed.'
