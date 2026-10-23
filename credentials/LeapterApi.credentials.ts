@@ -2,25 +2,12 @@ import type {
   ICredentialDataDecryptedObject,
   ICredentialTestRequest,
   ICredentialType,
+  IDataObject,
+  IHttpRequestHelper,
   IHttpRequestOptions,
   INodeProperties,
 } from 'n8n-workflow';
-
-/**
- * Evaluation keys per project, keyed by `<environment>/<application>`
- */
-type EvalKeyMap = Record<string, { id: string; key: string; mintedAt: number }>;
-
-function parseKeyMap(raw: unknown): EvalKeyMap {
-  if (typeof raw !== 'string' || raw === '') {
-    return {};
-  }
-  try {
-    return JSON.parse(raw) as EvalKeyMap;
-  } catch {
-    return {};
-  }
-}
+import { GRACE_MS, lastUsed, parseKeyMap, pending } from './eval-keys';
 
 function pathOf(url: string): string {
   try {
@@ -88,13 +75,75 @@ export class LeapterApi implements ICredentialType {
       headers.Authorization = `Bearer ${credentials.serviceKey as string}`;
     } else {
       const match = path.match(/\/runtime\/api\/v1\/([^/]+)\/([^/]+)\//);
-      const entry = match ? parseKeyMap(credentials.evalKeys)[`${match[1]}/${match[2]}`] : undefined;
-      if (entry) {
-        headers['X-API-Key'] = entry.key;
+      if (match) {
+        const project = `${match[1]}/${match[2]}`;
+        const entry = parseKeyMap(credentials.evalKeys)[project];
+        if (entry) {
+          headers['X-API-Key'] = entry.key;
+          lastUsed.set(project, { keyId: entry.id, at: Date.now() });
+        } else {
+          pending.add(project);
+        }
       }
     }
 
     return { ...requestOptions, headers };
+  }
+
+  // Runs before the first request and after every 401: creates missing evaluation keys and
+  // replaces a rejected one. n8n stores the returned evalKeys in the credential.
+  async preAuthentication(
+    this: IHttpRequestHelper,
+    credentials: ICredentialDataDecryptedObject,
+  ): Promise<IDataObject> {
+    const clusterUrl = (credentials.clusterUrl as string).replace(/\/+$/, '');
+    const authorization = `Bearer ${credentials.serviceKey as string}`;
+    const map = parseKeyMap(credentials.evalKeys);
+    const keysUrl = (project: string) => {
+      const [environment, application] = project.split('/');
+      return `${clusterUrl}/runtime-management/environments/${environment}/applications/${application}/keys`;
+    };
+    const mint = async (project: string) => {
+      const answer = (await this.helpers.httpRequest({
+        method: 'POST',
+        url: keysUrl(project),
+        headers: { Authorization: authorization },
+        body: { reason: 'n8n node', usedBy: 'n8n' },
+        json: true,
+      })) as { key: string; credential: { id: string } };
+      map[project] = { id: answer.credential.id, key: answer.key, mintedAt: Date.now() };
+    };
+
+    for (const project of [...pending]) {
+      if (!map[project]) {
+        await mint(project);
+      }
+      pending.delete(project);
+    }
+
+    // The 401 belongs to the request authenticated last. Replace its key only when that key is
+    // past the grace period and still the stored one; other projects' keys are left alone.
+    const last = [...lastUsed].sort(([, a], [, b]) => b.at - a.at)[0];
+    if (last) {
+      const [project, { keyId }] = last;
+      const stored = map[project];
+      if (stored && stored.id === keyId && Date.now() - stored.mintedAt > GRACE_MS) {
+        await mint(project);
+        try {
+          await this.helpers.httpRequest({
+            method: 'POST',
+            url: `${keysUrl(project)}/${keyId}/revoke`,
+            headers: { Authorization: authorization },
+            body: { reason: 'n8n node: replaced' },
+            json: true,
+          });
+        } catch {
+          // The replacement works without it; the old key stays until revoked in the Admin UI
+        }
+      }
+    }
+
+    return { evalKeys: JSON.stringify(map) };
   }
 
   // A 2xx means the service key is live
