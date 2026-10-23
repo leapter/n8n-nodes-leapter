@@ -97,7 +97,7 @@ The Leapter node provides dynamic operations based on the Blueprints deployed to
    - **JSON Mode**: Provide raw JSON input for advanced use cases
 4. Execute and receive results with the run ID
 
-The first use of a project creates its access key automatically, and the key takes up to a minute to become active. Meanwhile the field list keeps loading: the node asks again every 10 s, up to 6 times. If the key is still not active after that, the list says "Access to <project> is being activated, which takes up to a minute. Click Retry in a moment." A first run waits the same way and then notes in its output: "Access to <project> was activated; this run waited <n> s." Later runs start at once. A Blueprint without inputs shows "This blueprint takes no inputs. Run it as it is." and runs with an empty input.
+The first use of a project creates its access key automatically; the node starts this as soon as you choose the project. The key takes up to a minute to become active. Meanwhile a yellow note says "On first use, Leapter activates access to this project. This can take up to a minute; the fields load automatically.", n8n shows "Fetching parameters", and the node asks again every 10 s, up to 6 times. The fields then appear by themselves and the note disappears; you do not need to click anything. Only if the key is still not active after a minute does the list say "Access to <project> is being activated, which takes up to a minute. Click Retry in a moment." A first run waits the same way and then notes in its output: "Access to <project> was activated; this run waited <n> s." Later runs start at once. A Blueprint without inputs shows "This blueprint takes no inputs. Run it as it is." and runs with an empty input.
 
 ## Credentials
 

@@ -115,7 +115,11 @@ All requests use `disableFollowRedirect: true`; `assertHttps()` refuses non-http
 ## Key Implementation Details
 
 - **Only the POST `/models/{id}/runs` path** of the OpenAPI document is read, for the selected blueprint id; the document's `servers` are never used
-- **resourceMapper** generates dynamic fields from OpenAPI schema properties. n8n 2.44.5 does not show errors thrown by `getOperationFields`, so it answers with `emptyFieldsNotice` instead: while the project's key activates (401/404) and for a blueprint without inputs
+- **resourceMapper** generates dynamic fields from OpenAPI schema properties. n8n 2.44.5 does not show errors thrown by `getOperationFields`, nor `emptyFieldsNotice` while a list loads, so:
+  - `activationNotice` (type `notice`, above the resource mapper) explains the wait. Shown when a project is set in Visual Mapping, hidden once `parameters.schema` has entries (displayOptions read the path with lodash `get`).
+  - `getOperationFields` waits for an activating key itself (10 s × 6). Only then does it return `emptyFieldsNotice` (with n8n's Retry) as the fallback.
+  - A blueprint without inputs gets one hidden placeholder field `__leapter_no_inputs` (`display: false`). n8n ignores a hide rule on an empty list, so without it the activation notice would stay. `noInputsNotice` shows when `parameters.schema[0].id` is the placeholder; `execute` sends only `body.` fields, so the placeholder is never sent.
+  - `getOperations` pre-warms the project's key: one engine request through the credential, not awaited, so a missing key is created while the user picks the blueprint.
 - **Credential**: `clusterUrl` (display name "Leapter Server") is shown only under `showAdvanced`; its default is `https://runtime.leapter.com`
 - **Array fields** are passed as JSON strings in visual mode, parsed via `tryParseJson()`
 - **Response metadata**: Adds `_metadata.runId` (from `x-run-id` header); requests send the n8n execution ID as `X-Correlation-Id`

@@ -115,6 +115,11 @@ const CREDENTIAL_TYPE = 'leapterApi';
 const RETRY_INTERVAL_MS = 10_000;
 const MAX_RETRIES = 6;
 
+/**
+ * Id of the hidden placeholder field of a blueprint without inputs; never sent
+ */
+const NO_INPUTS_FIELD = '__leapter_no_inputs';
+
 function isActivating(error: unknown): boolean {
   const httpCode = (error as { httpCode?: string | null }).httpCode;
   return httpCode === '401' || httpCode === '404';
@@ -194,7 +199,42 @@ export class Leapter implements INodeType {
         description: 'How to provide operation parameters',
       },
 
-      // 4. Visual Parameter Mapping (resourceMapper)
+      // 4. Activation notice: shown while a project is chosen and its fields are not loaded yet.
+      // n8n cannot show emptyFieldsNotice during a load, so this static notice explains the wait
+      // and hides itself once the resource mapper's schema has entries.
+      {
+        displayName:
+          'On first use, Leapter activates access to this project. This can take up to a minute; the fields load automatically.',
+        name: 'activationNotice',
+        type: 'notice',
+        default: '',
+        displayOptions: {
+          show: {
+            project: [{ _cnd: { exists: true } }],
+            inputMode: ['visual'],
+          },
+          hide: {
+            'parameters.schema': [{ _cnd: { exists: true } }],
+          },
+        },
+      },
+
+      // 4a. A blueprint without inputs: its schema holds only the hidden placeholder field
+      // (n8n shows emptyFieldsNotice only for an empty schema, so this notice says it instead)
+      {
+        displayName: 'This blueprint takes no inputs. Run it as it is.',
+        name: 'noInputsNotice',
+        type: 'notice',
+        default: '',
+        displayOptions: {
+          show: {
+            inputMode: ['visual'],
+            'parameters.schema[0].id': [NO_INPUTS_FIELD],
+          },
+        },
+      },
+
+      // 4b. Visual Parameter Mapping (resourceMapper)
       {
         displayName: 'Parameters',
         name: 'parameters',
@@ -324,6 +364,9 @@ export class Leapter implements INodeType {
 
         try {
           const [environment, application] = projectValue.split('::');
+          // Pre-warm: one engine request now, so a missing key is created while the user still
+          // picks the blueprint. Not awaited; its result is ignored.
+          void prewarm(this, environment, application);
           const applications = await getApplications(this, environment);
           const callable =
             applications.find((entry) => entry.slug === application)?.callable ?? [];
@@ -434,8 +477,22 @@ export class Leapter implements INodeType {
           }
 
           if (fields.length === 0) {
-            // A run of such a blueprint sends {} as its body
-            return { fields, emptyFieldsNotice: 'This blueprint takes no inputs. Run it as it is.' };
+            // One hidden placeholder, so the schema has an entry: the activation notice hides (n8n
+            // ignores a hide rule on an empty list) and the no-inputs notice shows. execute() never
+            // sends it: only `body.` fields go into the body, so a run of such a blueprint sends {}.
+            return {
+              fields: [
+                {
+                  id: NO_INPUTS_FIELD,
+                  displayName: 'This blueprint takes no inputs',
+                  required: false,
+                  defaultMatch: false,
+                  display: false,
+                  type: 'string',
+                  canBeUsedToMatch: false,
+                },
+              ],
+            };
           }
           return { fields };
         } catch (error) {
@@ -492,7 +549,8 @@ export class Leapter implements INodeType {
           const paramValues = parameters.value || {};
 
           for (const [key, value] of Object.entries(paramValues)) {
-            if (key.startsWith('body.')) {
+            // Only blueprint inputs: never the no-inputs placeholder
+            if (key.startsWith('body.') && key !== NO_INPUTS_FIELD) {
               const paramName = key.replace('body.', '');
               // Try to parse JSON strings (for arrays and objects)
               const parsedValue = tryParseJson(value);
@@ -617,6 +675,34 @@ async function getApplications(
   })) as StatusAnswer;
 
   return answer.environments?.[0]?.applications ?? [];
+}
+
+/**
+ * One engine request for the project through the credential: a refusal (401, or 404 while the
+ * credential has no key) makes the credential create the project's key
+ */
+async function prewarm(
+  ctx: ILoadOptionsFunctions,
+  environment: string,
+  application: string,
+): Promise<void> {
+  try {
+    const runBase = await readRunBase(ctx, await clusterUrlOf(ctx));
+    assertHttps(ctx, runBase);
+    await ctx.helpers.httpRequestWithAuthentication.call(
+      ctx,
+      CREDENTIAL_TYPE,
+      {
+        method: 'GET',
+        url: `${runBase}/runtime/api/v1/${environment}/${application}/openapi`,
+        json: true,
+        disableFollowRedirect: true,
+      },
+      await engineCredentialOptions(ctx, environment, application),
+    );
+  } catch {
+    // Ignored: the field list asks again and reports problems itself
+  }
 }
 
 /**

@@ -362,8 +362,10 @@ async function record(browser, labState, serviceKey) {
 		const picked = Date.now();
 		const firstField = mapper.locator(N(`parameter-input-body.${Object.keys(DEMO_INPUT)[0]}`));
 		const notice = page.locator(N('empty-fields-notice'));
+		const activationBox = ndv.getByText('On first use, Leapter activates access to this project');
 		if (await mapper.getByText(/Fetching/).first().isVisible().catch(() => false)) {
 			extras.push({ name: 'fields-loading', at: (Date.now() - videoStart) / 1000 + 0.5 });
+			log(`loading: activation note ${(await activationBox.isVisible()) ? 'shown' : 'NOT shown'}`);
 		}
 		await Promise.race([
 			firstField.waitFor({ timeout: 90_000 }),
@@ -381,6 +383,8 @@ async function record(browser, labState, serviceKey) {
 		}
 		fieldsWait = Math.round((Date.now() - picked) / 1000);
 		log(`the editor waited ${fieldsWait} s for the fields`);
+		await sleep(500);
+		log(`loaded: activation note ${(await activationBox.isVisible()) ? 'STILL shown' : 'hidden'}`);
 		await sleep(1_500);
 	});
 
