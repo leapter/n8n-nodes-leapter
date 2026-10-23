@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 ## What This Is
-n8n community node that dynamically discovers and executes Leapter AI blueprints. It reads OpenAPI specs at runtime to populate dropdowns and generate input fields - no hardcoded operations.
+n8n community node that dynamically discovers and executes Leapter blueprints deployed to a Leapter Runtime Cluster. It reads the cluster's environments, projects and blueprints to populate dropdowns and each project's OpenAPI document to generate input fields - no hardcoded operations.
 
 ## Core Technologies
 - **TypeScript** (strict mode) - All source code
@@ -25,10 +25,12 @@ Releases are cut from the GitHub Releases UI (draft a release with a `vX.Y.Z` ta
 ```
 ├── nodes/Leapter/
 │   ├── Leapter.node.ts    # Main node implementation
+│   ├── cluster.ts         # Run base, https check, cluster error messages
 │   ├── Leapter.node.json  # Node metadata for n8n
 │   └── leapter.svg        # Node icon
 ├── credentials/
-│   └── LeapterApi.credentials.ts  # API key credential
+│   ├── LeapterApi.credentials.ts  # Service key credential, per-project evaluation keys
+│   └── eval-keys.ts       # Evaluation key map, grace period, authenticate ↔ preAuthentication side channel
 ├── dist/                  # Build output (git-ignored)
 └── package.json           # n8n node registration
 ```
@@ -78,35 +80,47 @@ Releases are cut from the GitHub Releases UI (draft a release with a `vX.Y.Z` ta
 
 ### Data Flow
 ```
-User selects project → Fetch OpenAPI spec → Parse blueprints → User selects blueprint → Generate input fields from schema → Execute POST to /models/{id}/runs
+User selects environment (GET {cp}/environments) → project (GET {cp}/environments/{env}/status, applications with callable blueprints)
+→ blueprint (callable[] of that application) → input fields from the engine's OpenAPI document
+→ Execute POST {runBase}/runtime/api/v1/{env}/{app}/models/{blueprintId}/runs
 ```
+`{cp}` is `{clusterUrl}/runtime-management`. `{runBase}` is read once per execution by `readRunBase()` (`nodes/Leapter/cluster.ts`).
 
-### Critical Pattern: Compound Value Encoding
-Dropdowns encode multiple values with `::` separator to avoid extra API calls:
-- **Project**: `projectId::specUrl::editorBaseUrl::projectName`
-- **Operation**: `method::path::operationUrl::editorBaseUrl::blueprintName`
+### Saved Parameter Values
+- **Environment**: the environment slug
+- **Project**: `environment::application` (application slug)
+- **Operation**: the blueprint id from `status` (`callable[].id`)
 
-This is parsed via array destructuring: `const [method, path, operationUrl] = operation.split('::')`
+Parsed via array destructuring: `const [environment, application] = project.split('::')`
 
-### Leapter API Endpoints
-- `POST /api/v1/n8n/projects` - Returns projects with their OpenAPI spec URLs
-- `GET {specUrl}` - Returns OpenAPI 3.0 spec for a project
-- `POST /models/{blueprintId}/runs` - Executes a blueprint (defined in spec)
-- `POST /api/api-keys/validate` - Credential test endpoint
+### Runtime Cluster Endpoints
+- `GET {cp}/environments` - Environments the service key may reach (also the credential test)
+- `GET {cp}/environments/{env}/status` - Applications with their callable blueprints (`id`, `name`, `slug`)
+- `POST {cp}/environments/{env}/applications/{app}/keys` - Creates a project's evaluation key
+- `POST {cp}/environments/{env}/applications/{app}/keys/{id}/revoke` - Revokes a replaced evaluation key
+- `GET {runBase}/runtime/api/v1/{env}/{app}/openapi` - The project's OpenAPI 3.0 document
+- `POST {runBase}/runtime/api/v1/{env}/{app}/models/{blueprintId}/runs` - Executes a blueprint
+- `GET {origin}/runtime-management/ui/config.json` - Public, no credential: `runBaseUrl`, or the origin when null, 404 or 410 (same rule as the genielabs CLI)
 
-### Authentication
-Uses `httpRequestWithAuthentication()` which auto-injects `X-API-Key` header via credential's `authenticate` block.
+All requests use `disableFollowRedirect: true`; `assertHttps()` refuses non-https addresses except `localhost`/`127.0.0.1`.
+
+### Authentication and Key Handling
+- The credential holds a key of the cluster's `n8n` service account (`serviceKey`, `lk_mgmt_…`). The control plane takes it; the engines take only per-project evaluation keys.
+- `authenticate` routes by URL path: `/runtime-management/` gets `Authorization: Bearer <serviceKey>`, `/runtime/api/v1/{env}/{app}/` gets `X-API-Key` from the hidden expirable field `evalKeys` (JSON map `{ "env/app": { id, key, mintedAt } }`).
+- `preAuthentication` (n8n calls it when `evalKeys` is empty and after every 401) creates a key for each project that was requested without one and replaces a rejected key once it is older than the 90 s grace period (`GRACE_MS`, `credentials/eval-keys.ts`): mint, then revoke the old id. A fresh key answers 401 for up to 60 s, so a younger key is never replaced. n8n stores the returned `evalKeys`.
+- `authenticate` and `preAuthentication` share a module-level side channel (`pending`, `lastUsed` in `credentials/eval-keys.ts`), because n8n gives `preAuthentication` only the credential data.
+- `execute` resends a run that throws 401 or 404 every 3 s for up to 90 s (a new key or a new deploy). Never set `ignoreHttpStatusErrors`: n8n re-runs `preAuthentication` only when a request throws a 401.
+- Errors: `answerOf()` reads status (`httpCode`), body and headers from the thrown `NodeApiError` (`cause.response`); `describeClusterError()` turns them into the user-facing messages.
 
 ## Key Implementation Details
 
-- **Only POST endpoints** are parsed - Leapter runs are always POST to `/models/{id}/runs`
+- **Only the POST `/models/{id}/runs` path** of the OpenAPI document is read, for the selected blueprint id; the document's `servers` are never used
 - **resourceMapper** generates dynamic fields from OpenAPI schema properties
 - **Array fields** are passed as JSON strings in visual mode, parsed via `tryParseJson()`
-- **Response metadata**: Adds `_metadata.runId` (from `x-run-id` header) and `_metadata.editorLink` (the project's Lab link, `editorBaseUrl` from discovery; omitted when missing or the literal `'undefined'` in values saved before Lab sent it)
+- **Response metadata**: Adds `_metadata.runId` (from `x-run-id` header); requests send the n8n execution ID as `X-Correlation-Id`
 - **$ref resolution**: `resolveSchema()` handles `#/components/schemas/...` references
 
 ## Gotchas
 - `usableAsTool: true` can cause node loading issues in dev mode (see line 240)
-- OpenAPI spec must have `servers` array defined
 - Minimum n8n version 0.228.0 required for resourceMapper UI
 - The `::` separator assumes values don't contain `::` themselves
