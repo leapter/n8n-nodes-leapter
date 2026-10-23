@@ -10,8 +10,10 @@ import type {
   FieldType,
   IHttpRequestMethods,
   IDataObject,
+  JsonObject,
 } from 'n8n-workflow';
-import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
+import { NodeApiError, NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
+import { assertHttps, clusterUrlOf, readRunBase } from './cluster';
 
 /**
  * OpenAPI 3.0 Specification types
@@ -76,21 +78,22 @@ interface JSONSchema {
 }
 
 /**
- * Project info from /api/n8n/projects
+ * Answer of GET /runtime-management/environments
  */
-interface ProjectInfo {
-  projectId: string;
-  projectName: string;
-  specUrl: string;
-  editorBaseUrl: string;
+interface EnvironmentsAnswer {
+  environments: Array<{ slug: string }>;
 }
 
 /**
- * Response from /api/n8n/projects
+ * Answer of GET /runtime-management/environments/{env}/status
  */
-interface ProjectDiscoveryResponse {
-  accountId: string;
-  projects: ProjectInfo[];
+interface StatusAnswer {
+  environments: Array<{
+    applications: Array<{
+      slug: string;
+      callable: Array<{ id: string; name: string; slug: string }>;
+    }>;
+  }>;
 }
 
 /**
@@ -105,7 +108,7 @@ export class Leapter implements INodeType {
     icon: 'file:leapter.svg',
     group: ['transform'],
     version: 1,
-    subtitle: '={{$parameter["operation"]?.split("::")[4] || ""}}',
+    subtitle: '={{$parameter["project"]?.split("::")[1] || ""}}',
     description: 'Execute Leapter blueprint operations dynamically',
     usableAsTool: true,
     defaults: {
@@ -120,13 +123,28 @@ export class Leapter implements INodeType {
       },
     ],
     properties: [
-      // 1. Project Dropdown (loaded from /api/n8n/projects)
+      // 1. Environment Dropdown (loaded from the control plane)
+      {
+        displayName: 'Environment Name or ID',
+        name: 'environment',
+        type: 'options',
+        typeOptions: {
+          loadOptionsMethod: 'getEnvironments',
+        },
+        default: '',
+        required: true,
+        noDataExpression: true,
+        description: 'The Runtime Cluster environment the project is deployed in. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+      },
+
+      // 2. Project Dropdown (deployed projects with public blueprints, depends on environment)
       {
         displayName: 'Project Name or ID',
         name: 'project',
         type: 'options',
         typeOptions: {
           loadOptionsMethod: 'getProjects',
+          loadOptionsDependsOn: ['environment'],
         },
         default: '',
         required: true,
@@ -134,7 +152,7 @@ export class Leapter implements INodeType {
         description: 'The Leapter project containing your blueprints. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
       },
 
-      // 2. Blueprint Dropdown (dynamically loaded from OpenAPI spec, depends on project)
+      // 3. Blueprint Dropdown (the project's public blueprints, depends on project)
       {
         displayName: 'Blueprint Name or ID',
         name: 'operation',
@@ -149,7 +167,7 @@ export class Leapter implements INodeType {
         description: 'The blueprint operation to execute. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
       },
 
-      // 3. Input Mode Toggle
+      // 4. Input Mode Toggle
       {
         displayName: 'Input Mode',
         name: 'inputMode',
@@ -170,7 +188,7 @@ export class Leapter implements INodeType {
         description: 'How to provide operation parameters',
       },
 
-      // 4. Visual Parameter Mapping (resourceMapper)
+      // 5. Visual Parameter Mapping (resourceMapper)
       {
         displayName: 'Parameters',
         name: 'parameters',
@@ -202,7 +220,7 @@ export class Leapter implements INodeType {
         description: 'Map input data to operation parameters',
       },
 
-      // 5. JSON Input (fallback for complex schemas)
+      // 6. JSON Input (fallback for complex schemas)
       {
         displayName: 'Parameters (JSON)',
         name: 'parametersJson',
@@ -219,7 +237,7 @@ export class Leapter implements INodeType {
         hint: 'Use this for complex nested objects or advanced use cases',
       },
 
-      // 6. Additional Options
+      // 7. Additional Options
       {
         displayName: 'Options',
         name: 'options',
@@ -243,57 +261,62 @@ export class Leapter implements INodeType {
   methods = {
     loadOptions: {
       /**
-       * Fetches accessible projects from /api/n8n/projects
+       * Lists the environments the service key may reach
+       */
+      async getEnvironments(
+        this: ILoadOptionsFunctions,
+      ): Promise<INodePropertyOptions[]> {
+        try {
+          const clusterUrl = await clusterUrlOf(this);
+          const answer = (await this.helpers.httpRequestWithAuthentication.call(
+            this,
+            CREDENTIAL_TYPE,
+            {
+              method: 'GET',
+              url: `${clusterUrl}/runtime-management/environments`,
+              json: true,
+              disableFollowRedirect: true,
+            },
+          )) as EnvironmentsAnswer;
+
+          return (answer.environments ?? []).map((environment) => ({
+            name: environment.slug,
+            value: environment.slug,
+          }));
+        } catch (error) {
+          const err = error as Error;
+          throw new NodeOperationError(
+            this.getNode(),
+            `Failed to load environments: ${err.message}`,
+          );
+        }
+      },
+
+      /**
+       * Lists the environment's deployed projects that have public blueprints
        */
       async getProjects(
         this: ILoadOptionsFunctions,
       ): Promise<INodePropertyOptions[]> {
+        const environment = this.getNodeParameter('environment') as string;
+
+        if (!environment) {
+          return [];
+        }
+
         try {
-          // Get credentials for server URL
-          const credentials = await this.getCredentials(CREDENTIAL_TYPE);
-          const labUrl = credentials.server as string;
+          const applications = await getApplications(this, environment);
 
-          // Discover accessible projects using authenticated request
-          const discoveryResponse = (await this.helpers.httpRequestWithAuthentication.call(
-            this,
-            CREDENTIAL_TYPE,
-            {
-              method: 'POST',
-              url: `${labUrl}/api/v1/n8n/projects`,
-              json: true,
-            },
-          )) as ProjectDiscoveryResponse;
-
-          if (!discoveryResponse.projects || discoveryResponse.projects.length === 0) {
-            throw new NodeOperationError(
-              this.getNode(),
-              'No projects found. Ensure your API key has access to at least one project.',
-            );
-          }
-
-          // Map projects to dropdown options
-          // Value format: projectId::specUrl::editorBaseUrl::projectName
-          const options: INodePropertyOptions[] = discoveryResponse.projects.map(
-            (project) => ({
-              name: project.projectName,
-              value: `${project.projectId}::${project.specUrl}::${project.editorBaseUrl}::${project.projectName}`,
-              description: `Project ID: ${project.projectId}`,
-            }),
-          );
-
-          options.sort((a, b) => a.name.localeCompare(b.name));
-
-          return options;
+          // Value format: environment::application
+          return applications
+            .filter((application) => application.callable?.length > 0)
+            .map((application) => ({
+              name: application.slug,
+              value: `${environment}::${application.slug}`,
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name));
         } catch (error) {
-          const err = error as Error & { statusCode?: number };
-
-          if (err.statusCode === 401 || err.statusCode === 403) {
-            throw new NodeOperationError(
-              this.getNode(),
-              'Invalid API key or no project access. Please check your credentials.',
-            );
-          }
-
+          const err = error as Error;
           throw new NodeOperationError(
             this.getNode(),
             `Failed to load projects: ${err.message}`,
@@ -302,92 +325,29 @@ export class Leapter implements INodeType {
       },
 
       /**
-       * Fetches OpenAPI spec for selected project and returns all operations
+       * Lists the selected project's public blueprints
        */
       async getOperations(
         this: ILoadOptionsFunctions,
       ): Promise<INodePropertyOptions[]> {
-        const returnData: INodePropertyOptions[] = [];
         const projectValue = this.getNodeParameter('project') as string;
 
         if (!projectValue) {
-          return returnData;
+          return [];
         }
 
         try {
-          // Parse project value: projectId::specUrl::editorBaseUrl::projectName
-          const [, specUrl, editorBaseUrl] = projectValue.split('::');
+          const [environment, application] = projectValue.split('::');
+          const applications = await getApplications(this, environment);
+          const callable =
+            applications.find((entry) => entry.slug === application)?.callable ?? [];
 
-          // Fetch OpenAPI spec using authenticated request
-          const spec = (await this.helpers.httpRequestWithAuthentication.call(
-            this,
-            CREDENTIAL_TYPE,
-            {
-              method: 'GET',
-              url: specUrl,
-              json: true,
-            },
-          )) as OpenAPISpec;
-
-          if (!spec.openapi || !spec.paths) {
-            throw new NodeOperationError(
-              this.getNode(),
-              'Invalid OpenAPI specification',
-            );
-          }
-
-          // Validate that spec has servers defined
-          if (!spec.servers || spec.servers.length === 0) {
-            throw new NodeOperationError(
-              this.getNode(),
-              'OpenAPI spec must define at least one server URL',
-            );
-          }
-
-          // Get server URL from spec (remove trailing slash to avoid double slashes)
-          const serverUrl = spec.servers[0].url.replace(/\/$/, '');
-
-          // Parse operations from spec - Leapter only uses POST for runs
-          for (const [path, pathItem] of Object.entries(spec.paths || {})) {
-            const operation = pathItem.post;
-
-            if (operation && !operation.deprecated) {
-              // Extract model ID from path (e.g., /models/requirement-doc/runs -> requirement-doc)
-              const modelIdMatch = path.match(/\/models\/([^/]+)\/runs/);
-              const modelId = modelIdMatch?.[1] || path;
-
-              // Build the full operation URL from server + path
-              const operationUrl = `${serverUrl}${path}`;
-              const blueprintName = operation.summary || modelId;
-
-              returnData.push({
-                name: blueprintName,
-                value: `post::${path}::${operationUrl}::${editorBaseUrl}::${blueprintName}`,
-                description: operation.description || undefined,
-              });
-            }
-          }
-
-          returnData.sort((a, b) => a.name.localeCompare(b.name));
-
-          return returnData;
+          // Value: the blueprint id the engine addresses runs by
+          return callable
+            .map((blueprint) => ({ name: blueprint.name, value: blueprint.id }))
+            .sort((a, b) => a.name.localeCompare(b.name));
         } catch (error) {
-          const err = error as Error & { statusCode?: number };
-
-          if (err.message?.includes('Invalid API key')) {
-            throw new NodeOperationError(
-              this.getNode(),
-              'Invalid API key. Please check your credentials.',
-            );
-          }
-
-          if (err.statusCode === 401 || err.statusCode === 403) {
-            throw new NodeOperationError(
-              this.getNode(),
-              'Invalid API key. Please check your credentials.',
-            );
-          }
-
+          const err = error as Error;
           throw new NodeOperationError(
             this.getNode(),
             `Failed to load blueprints: ${err.message}`,
@@ -398,49 +358,29 @@ export class Leapter implements INodeType {
 
     resourceMapping: {
       /**
-       * Generates input fields for the selected operation
+       * Generates input fields for the selected blueprint from the engine's OpenAPI document
        */
       async getOperationFields(
         this: ILoadOptionsFunctions,
       ): Promise<ResourceMapperFields> {
         const fields: ResourceMapperField[] = [];
         const projectValue = this.getNodeParameter('project') as string;
-        const operationValue = this.getNodeParameter('operation') as string;
+        const blueprintId = this.getNodeParameter('operation') as string;
 
-        if (!projectValue || !operationValue) {
+        if (!projectValue || !blueprintId) {
           return { fields };
         }
 
+        const [environment, application] = projectValue.split('::');
+        const spec = await getOpenApiSpec(this, environment, application);
+
         try {
-          // Parse project value: projectId::specUrl::editorBaseUrl::projectName
-          const [, specUrl] = projectValue.split('::');
-          // Parse operation value: method::path::operationUrl::editorBaseUrl::blueprintName
-          const [method, path] = operationValue.split('::');
-
-          // Fetch OpenAPI spec using authenticated request
-          const spec = (await this.helpers.httpRequestWithAuthentication.call(
-            this,
-            CREDENTIAL_TYPE,
-            {
-              method: 'GET',
-              url: specUrl,
-              json: true,
-            },
-          )) as OpenAPISpec;
-
-          const pathItem = spec.paths[path];
-          if (!pathItem) {
-            throw new NodeOperationError(
-              this.getNode(),
-              `Path ${path} not found in spec`,
-            );
-          }
-
-          const operationDef = pathItem[method as keyof PathItem];
+          const path = `/models/${blueprintId}/runs`;
+          const operationDef = spec.paths?.[path]?.post;
           if (!operationDef) {
             throw new NodeOperationError(
               this.getNode(),
-              `Operation ${method} ${path} not found in spec`,
+              `Path ${path} not found in spec`,
             );
           }
 
@@ -541,8 +481,8 @@ export class Leapter implements INodeType {
           timeout?: number;
         };
 
-        // Parse operation: method::path::operationUrl::editorBaseUrl::blueprintName
-        const [method, , operationUrl, editorBaseUrl] = operation.split('::');
+        // Parse operation: method::path::operationUrl
+        const [method, , operationUrl] = operation.split('::');
 
         // Get parameters
         let bodyParams: IDataObject = {};
@@ -658,17 +598,12 @@ export class Leapter implements INodeType {
         // Extract runId from response header
         const runId = responseHeaders['x-run-id'] || responseHeaders['X-Run-Id'];
 
-        // editorBaseUrl links the whole project in Lab. Values saved against a
-        // Lab that did not send it hold the literal 'undefined'; omit the link then.
-        const hasEditorLink = !!editorBaseUrl && editorBaseUrl !== 'undefined';
-
         // Return output data with metadata
         returnData.push({
           json: {
             ...responseBody,
             _metadata: {
               runId,
-              ...(hasEditorLink && { editorLink: editorBaseUrl }),
             },
           },
           pairedItem: { item: itemIndex },
@@ -695,6 +630,56 @@ export class Leapter implements INodeType {
     }
 
     return [returnData];
+  }
+}
+
+/**
+ * The environment's applications from GET {clusterUrl}/runtime-management/environments/{env}/status
+ */
+async function getApplications(
+  ctx: ILoadOptionsFunctions,
+  environment: string,
+): Promise<StatusAnswer['environments'][number]['applications']> {
+  const clusterUrl = await clusterUrlOf(ctx);
+  const answer = (await ctx.helpers.httpRequestWithAuthentication.call(ctx, CREDENTIAL_TYPE, {
+    method: 'GET',
+    url: `${clusterUrl}/runtime-management/environments/${environment}/status`,
+    json: true,
+    disableFollowRedirect: true,
+  })) as StatusAnswer;
+
+  return answer.environments?.[0]?.applications ?? [];
+}
+
+/**
+ * The project's OpenAPI document from the engine. This request gets the project's evaluation
+ * key from the credential; the first 401 makes the credential create it, so the key exists
+ * before the workflow first runs.
+ */
+async function getOpenApiSpec(
+  ctx: ILoadOptionsFunctions,
+  environment: string,
+  application: string,
+): Promise<OpenAPISpec> {
+  const runBase = await readRunBase(ctx, await clusterUrlOf(ctx));
+  assertHttps(ctx, runBase);
+
+  try {
+    return (await ctx.helpers.httpRequestWithAuthentication.call(ctx, CREDENTIAL_TYPE, {
+      method: 'GET',
+      url: `${runBase}/runtime/api/v1/${environment}/${application}/openapi`,
+      json: true,
+      disableFollowRedirect: true,
+    })) as OpenAPISpec;
+  } catch (error) {
+    const httpCode = (error as { httpCode?: string | null }).httpCode;
+    if (httpCode === '401' || httpCode === '404') {
+      throw new NodeOperationError(
+        ctx.getNode(),
+        `Access to ${application} is being activated, which takes up to a minute. Reopen this list in a moment.`,
+      );
+    }
+    throw new NodeApiError(ctx.getNode(), error as JsonObject);
   }
 }
 
