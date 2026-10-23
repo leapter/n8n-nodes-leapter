@@ -21,3 +21,6 @@ npm-debug.log*
 # Environment
 .env
 .env.local
+
+# Demo recording output
+e2e/demo/recordings/

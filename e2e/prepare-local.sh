@@ -3,9 +3,10 @@
 #   eval "$(bash e2e/prepare-local.sh)" && pnpm e2e
 #
 # Grants service account n8n and the bootstrap principal `operator` on dev (a key creator must hold
-# what the key holds, D-SA-4 condition 2), creates an n8n service key and picks the first
-# application of dev with a public blueprint. Messages go to stderr, so only the exports are
-# evaluated.
+# what the key holds, D-SA-4 condition 2), creates an n8n service key and picks APPLICATION, else
+# the first application of dev with a public blueprint. Without INPUT_JSON it picks the fixture
+# application whose blueprint the default input fits. Messages go to stderr, so only the exports
+# are evaluated.
 set -euo pipefail
 
 GENIELABS_DIR=${GENIELABS_DIR:-$HOME/leapter/genielabs}
@@ -52,9 +53,13 @@ SERVICE_KEY=$(jq -r '.key' <<<"$KEY_ANSWER")
 SERVICE_KEY_ID=$(jq -r '.credential.id' <<<"$KEY_ANSWER")
 echo "prepare-local: created service key $SERVICE_KEY_ID" >&2
 
-APP=$(admin GET /environments/dev/status |
-	jq -c '[.environments[0].applications[] | select((.callable // []) | length > 0)][0] // empty')
-[ -n "$APP" ] || fail "No application in dev has a public blueprint. Deploy a project with one from the Lab."
+# The default input below fits only the fixture blueprint "Hello World"
+[ -n "${INPUT_JSON:-}" ] || APPLICATION=${APPLICATION:-n8n-discovery-spike-fixtures}
+
+APP=$(admin GET /environments/dev/status | jq -c --arg app "${APPLICATION:-}" \
+	'[.environments[0].applications[] | select((.callable // []) | length > 0)
+	  | select($app == "" or .slug == $app)][0] // empty')
+[ -n "$APP" ] || fail "No application in dev${APPLICATION:+ named $APPLICATION} has a public blueprint. Deploy a project with one from the Lab."
 
 # The fixture blueprint "Hello World" takes {"userInput": string}; set INPUT_JSON for another one
 INPUT_JSON=${INPUT_JSON:-'{"userInput": "n8n e2e"}'}
