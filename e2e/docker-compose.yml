@@ -1,0 +1,33 @@
+# n8n 2.44.5 with this repository's dist/ as a custom extension; started by e2e/run.sh
+name: n8n-leapter-e2e
+
+services:
+  n8n:
+    image: n8nio/n8n:2.44.5
+    # The relay (relay.js) runs beside n8n in the same container, so it survives `restart`
+    entrypoint: ['tini', '--', 'sh', '-c', 'node /e2e/relay.js & exec /docker-entrypoint.sh']
+    ports:
+      - '127.0.0.1:${N8N_PORT:-5691}:5678'
+    environment:
+      N8N_ENCRYPTION_KEY: n8n-leapter-e2e-encryption-key
+      N8N_CUSTOM_EXTENSIONS: /leapter/dist
+      N8N_SECURE_COOKIE: 'false'
+      N8N_DIAGNOSTICS_ENABLED: 'false'
+      N8N_PERSONALIZATION_ENABLED: 'false'
+      # Owner from the environment; password e2e-Owner-Pass-1 (a local throwaway instance)
+      N8N_INSTANCE_OWNER_MANAGED_BY_ENV: 'true'
+      N8N_INSTANCE_OWNER_EMAIL: e2e@leapter.test
+      N8N_INSTANCE_OWNER_PASSWORD_HASH: $$2a$$10$$zc1ZqNqNHF8DCGbw1vPV2uTWcaSGgtq44IzxALbh.o4l.b3Nb5o7C
+      N8N_INSTANCE_OWNER_FIRST_NAME: E2E
+      N8N_INSTANCE_OWNER_LAST_NAME: Owner
+      RELAY_PORTS: ${RELAY_PORTS:-}
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ../dist:/leapter/dist:ro
+      - ./relay.js:/e2e/relay.js:ro
+
+volumes:
+  # SQLite database and n8n config
+  n8n-data:
