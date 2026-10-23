@@ -97,7 +97,7 @@ The Leapter node provides dynamic operations based on the Blueprints deployed to
    - **JSON Mode**: Provide raw JSON input for advanced use cases
 4. Execute and receive results with the run ID
 
-The first use of a project creates its access key automatically and can take up to a minute: the field list then says "Access to <project> is being activated, which takes up to a minute. Click Retry in a moment.", and a first run waits until the key is active. Later runs start at once. A Blueprint without inputs shows "This blueprint takes no inputs. Run it as it is."
+The first use of a project creates its access key automatically, and the key takes up to a minute to become active. Meanwhile the field list keeps loading: the node asks again every 10 s, up to 6 times. If the key is still not active after that, the list says "Access to <project> is being activated, which takes up to a minute. Click Retry in a moment." A first run waits the same way and then notes in its output: "Access to <project> was activated; this run waited <n> s." Later runs start at once. A Blueprint without inputs shows "This blueprint takes no inputs. Run it as it is." and runs with an empty input.
 
 ## Credentials
 
@@ -164,14 +164,14 @@ Runs appear in the Admin UI under **Runs**, with the n8n execution ID as their c
 | Answer | Message |
 |--------|---------|
 | 403 from the cluster | "The cluster refused the service key. It was revoked or has no rights here. Create a new key in the Admin UI: Service accounts → n8n → Create key." |
-| 401 from a run, after the node's own retries (up to 90 s) | "The project's access key is not active yet or was revoked. Try again in a minute." |
-| 404 without a JSON body, after the node's own retries | "The cluster serves nothing at this address yet. A newly deployed project takes about a minute to be reachable." |
+| 401 from a run, after the node's own retries (6, 10 s apart) | "The project's access key is not active yet or was revoked. Try again in a minute." |
+| 404 without a JSON body, after the node's own retries (6, 10 s apart) | "The cluster serves nothing at this address yet. A newly deployed project takes about a minute to be reachable." |
 | 400 | The cluster's `detail`, then one line per invalid field: `<field>: <message>` |
 | 500 | The cluster's `detail`, plus the Blueprint's exception type |
 | 429 or 503 | The cluster's `detail`, plus "Retry after <n> s" when the cluster says so. Use n8n's **Retry On Fail** setting to retry automatically. |
 | Any other | The cluster's `detail`, else its `title`, else "Request failed with status <n>" |
 
-While loading the field list, a 401 or 404 shows "Access to <project> is being activated, which takes up to a minute. Reopen this list in a moment."
+While loading the field list, a 401 or 404 is retried the same way; only if it persists does the list show "Access to <project> is being activated, which takes up to a minute. Click Retry in a moment."
 
 With **Continue On Fail**, a failed item outputs `{ error, statusCode, ...body }`.
 

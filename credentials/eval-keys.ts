@@ -16,6 +16,8 @@ export const GRACE_MS = 90_000;
 export const pending = new Set<string>();
 // Key sent last per project
 export const lastUsed = new Map<string, { keyId: string; at: number }>();
+// Project of the engine request authenticated last, with or without a key
+export const lastRequested: { project?: string } = {};
 
 export function parseKeyMap(raw: unknown): EvalKeyMap {
   if (typeof raw !== 'string' || raw === '') {
