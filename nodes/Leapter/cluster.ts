@@ -4,6 +4,12 @@ import { NodeApiError, NodeOperationError } from 'n8n-workflow';
 type Context = IExecuteFunctions | ILoadOptionsFunctions;
 
 /**
+ * Leapter's hosted cluster. n8n leaves the credential's `clusterUrl` out while its Advanced
+ * Settings are off (same default as credentials/LeapterApi.credentials.ts).
+ */
+const DEFAULT_CLUSTER_URL = 'https://runtime.leapter.com';
+
+/**
  * Refuses any address that is not https://, except on this machine
  */
 export function assertHttps(ctx: Context, url: string): void {
@@ -27,7 +33,7 @@ export function assertHttps(ctx: Context, url: string): void {
  */
 export async function clusterUrlOf(ctx: Context): Promise<string> {
   const credentials = await ctx.getCredentials('leapterApi');
-  const clusterUrl = String(credentials.clusterUrl ?? '').replace(/\/+$/, '');
+  const clusterUrl = String(credentials.clusterUrl || DEFAULT_CLUSTER_URL).replace(/\/+$/, '');
   assertHttps(ctx, clusterUrl);
   return clusterUrl;
 }

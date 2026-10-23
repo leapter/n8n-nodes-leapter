@@ -30,8 +30,8 @@ Docker, `jq`, and Playwright's Chromium and ffmpeg (`npx playwright install chro
 | # | Caption | On screen |
 |---|---------|-----------|
 | 1 | Install the Leapter node in n8n | The nodes panel finds the installed Leapter node |
-| 2 | Add your Runtime Cluster and the n8n service key | New credential "Leapter API": the cluster URL typed, the key pasted, Save, then the test ("Retry" in n8n's result banner) answers "Connection tested successfully" |
-| 3 | Pick environment, project and blueprint | Manual Trigger → Leapter; `dev`, `insurance-claim-triage`, "Insurance Claim Triage"; the input fields appear, after n8n's "Retry" while the project's new key activates |
+| 2 | Add your Runtime Cluster and the n8n service key | New credential "Leapter API": the key pasted; Advanced Settings opened, showing the default Leapter Server `https://runtime.leapter.com`, which the local take replaces with the local cluster; Save, then the test ("Retry" in n8n's result banner) answers "Connection tested successfully" |
+| 3 | Pick environment, project and blueprint | Manual Trigger → Leapter; project `insurance-claim-triage` (no environment choice: the key reaches one) and "Insurance Claim Triage"; the field list shows the node's notice "Access to insurance-claim-triage is being activated…" until n8n's "Retry" loads the input fields |
 | 4 | Enter a claim | The claim below is entered |
 | 5 | Run it | Execute workflow |
 | 6 | The decision comes back with its trace id | The output (JSON): `outputData.decision` and `_metadata.runId` |
@@ -50,7 +50,9 @@ policy within limit" (expects `approve`):
 **After the take:** trims the video to start at step 1 with Playwright's ffmpeg
 (`-ss <sec> -i in.webm -c:v libvpx -b:v 3M -crf 10 out.webm`), writes the caption marks to
 `recordings/marks.json`, then checks the video: it plays it in headless Chromium and saves one frame per
-caption as `recordings/caption-<n>.png` when `currentTime` passes each mark, and fails unless the length is
+caption as `recordings/caption-<n>.png` when `currentTime` passes each mark (1.2 s before the next caption, so
+the frame shows what the step achieved), plus `recordings/activation-notice.png` while the activation notice
+shows, and fails unless the length is
 60–120 s and the seven captions come in order, each for at least 2.5 s. `--verify` repeats only
 this check.
 

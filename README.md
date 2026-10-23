@@ -86,36 +86,36 @@ The Leapter node will be available in the n8n node picker.
 The Leapter node provides dynamic operations based on the Blueprints deployed to your Runtime Cluster:
 
 - **Execute Blueprint**: Run any public Leapter Blueprint with input parameters
-- **Dynamic Discovery**: Lists environments, projects and Blueprints from the cluster and reads each Blueprint's input fields from its OpenAPI specification
+- **Dynamic Discovery**: Lists the projects and Blueprints your service key reaches and reads each Blueprint's input fields from its OpenAPI specification
 
 ### How It Works
 
-1. Select an **Environment** of your Runtime Cluster
-2. Select a **Project**: the dropdown lists every project deployed to that environment that has public Blueprints
-3. Select a **Blueprint**: the dropdown lists the project's public Blueprints
-4. Configure input parameters using either:
+1. Select a **Project**: the dropdown lists every deployed project with public Blueprints that your service key reaches. When the key reaches more than one environment, each project is shown as `environment · project`.
+2. Select a **Blueprint**: the dropdown lists the project's public Blueprints
+3. Configure input parameters using either:
    - **Visual Mode**: Map fields visually with type hints
    - **JSON Mode**: Provide raw JSON input for advanced use cases
-5. Execute and receive results with the run ID
+4. Execute and receive results with the run ID
 
-The first use of a project creates its access key automatically and can take up to a minute: the field list may ask you to reopen it in a moment, and a first run waits until the key is active. Later runs start at once.
+The first use of a project creates its access key automatically and can take up to a minute: the field list then says "Access to <project> is being activated, which takes up to a minute. Click Retry in a moment.", and a first run waits until the key is active. Later runs start at once. A Blueprint without inputs shows "This blueprint takes no inputs. Run it as it is."
 
 ## Credentials
 
-One Leapter credential gives access to every project of an environment. Use one credential per environment.
+One Leapter credential gives access to every project in the environments its service key reaches.
 
 ### Setting Up Credentials
 
 1. **Deploy the project** in the Leapter Lab to an environment of your Runtime Cluster.
 2. **Create a key for the `n8n` service account** in the Runtime Cluster's Admin UI: **Service accounts → n8n → Create key**. Copy the key (starts with `lk_mgmt_`).
-3. **Create the credential** in n8n: add a "Leapter API" credential, enter the cluster address and that key, then click **Test credential**.
+3. **Create the credential** in n8n: add a "Leapter API" credential, paste that key and save; n8n tests it. For a self-hosted or development cluster, turn on **Advanced Settings** and enter its address as **Leapter Server**.
 
 ### Credential Fields
 
 | Field | Description | Required |
 |-------|-------------|----------|
-| Cluster URL | Your Runtime Cluster's address: the Admin UI's address without `/runtime-management/ui` (default: `https://runtime.leapter.com`, Leapter's hosted cluster) | Yes |
 | Service Key | A key of the `n8n` service account (starts with `lk_mgmt_`) | Yes |
+| Advanced Settings | Shows the server field | No |
+| Leapter Server | The Leapter Runtime Cluster: the Admin UI's address without `/runtime-management/ui`. Default `https://runtime.leapter.com`; only change for self-hosted clusters or development | No |
 
 The credential also keeps the access keys it creates for each project, in a field n8n does not show. Anyone who can read the credential in n8n can read them.
 
@@ -130,7 +130,7 @@ The credential also keeps the access keys it creates for each project, in a fiel
 
 Visual mode provides a guided experience with field-by-field mapping:
 
-1. Select your environment, project and Blueprint
+1. Select your project and Blueprint
 2. The node automatically loads available input fields
 3. Map values from previous nodes or enter static values
 4. Each field shows its type and whether it's required
@@ -139,7 +139,7 @@ Visual mode provides a guided experience with field-by-field mapping:
 
 For advanced users or complex payloads:
 
-1. Select your environment, project and Blueprint
+1. Select your project and Blueprint
 2. Switch **Input Mode** to "JSON"
 3. Enter your parameters as a JSON object
 4. Refer to the OpenAPI spec for field definitions
