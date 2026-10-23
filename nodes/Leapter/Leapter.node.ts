@@ -13,7 +13,7 @@ import type {
   JsonObject,
 } from 'n8n-workflow';
 import { NodeApiError, NodeConnectionTypes, NodeOperationError, sleep } from 'n8n-workflow';
-import { assertHttps, clusterUrlOf, readRunBase } from './cluster';
+import { answerOf, assertHttps, clusterError, clusterUrlOf, readRunBase } from './cluster';
 
 /**
  * OpenAPI 3.0 Specification types
@@ -290,11 +290,7 @@ export class Leapter implements INodeType {
             value: environment.slug,
           }));
         } catch (error) {
-          const err = error as Error;
-          throw new NodeOperationError(
-            this.getNode(),
-            `Failed to load environments: ${err.message}`,
-          );
+          throw clusterError(this, error, 'Failed to load environments');
         }
       },
 
@@ -322,11 +318,7 @@ export class Leapter implements INodeType {
             }))
             .sort((a, b) => a.name.localeCompare(b.name));
         } catch (error) {
-          const err = error as Error;
-          throw new NodeOperationError(
-            this.getNode(),
-            `Failed to load projects: ${err.message}`,
-          );
+          throw clusterError(this, error, 'Failed to load projects');
         }
       },
 
@@ -353,11 +345,7 @@ export class Leapter implements INodeType {
             .map((blueprint) => ({ name: blueprint.name, value: blueprint.id }))
             .sort((a, b) => a.name.localeCompare(b.name));
         } catch (error) {
-          const err = error as Error;
-          throw new NodeOperationError(
-            this.getNode(),
-            `Failed to load blueprints: ${err.message}`,
-          );
+          throw clusterError(this, error, 'Failed to load blueprints');
         }
       },
     },
@@ -582,45 +570,24 @@ export class Leapter implements INodeType {
           pairedItem: { item: itemIndex },
         });
       } catch (error) {
-        const err = error as Error & {
-          httpCode?: string | null;
-          context?: { data?: IDataObject };
-        };
+        const nodeError = clusterError(this, error, 'Blueprint execution failed', itemIndex);
 
         if (this.continueOnFail()) {
-          if (err.httpCode) {
-            const statusCode = Number(err.httpCode);
-            const responseBody = err.context?.data ?? {};
-            const errorMessage =
-              (responseBody.detail as string) ||
-              (responseBody.error as string) ||
-              (responseBody.message as string) ||
-              `Request failed with status ${statusCode}`;
-            returnData.push({
-              json: {
-                error: errorMessage,
-                statusCode,
-                ...responseBody,
-              },
-              pairedItem: { item: itemIndex },
-            });
-            continue;
-          }
-
+          const answer = answerOf(error);
+          const responseBody =
+            typeof answer?.body === 'object' && answer.body !== null
+              ? (answer.body as IDataObject)
+              : {};
           returnData.push({
-            json: {
-              error: err.message,
-            },
+            json: answer
+              ? { error: nodeError.message, statusCode: answer.status, ...responseBody }
+              : { error: nodeError.message },
             pairedItem: { item: itemIndex },
           });
           continue;
         }
 
-        throw new NodeOperationError(
-          this.getNode(),
-          `Blueprint execution failed: ${err.message}`,
-          { itemIndex },
-        );
+        throw nodeError;
       }
     }
 
@@ -674,7 +641,7 @@ async function getOpenApiSpec(
         `Access to ${application} is being activated, which takes up to a minute. Reopen this list in a moment.`,
       );
     }
-    throw new NodeApiError(ctx.getNode(), error as JsonObject);
+    throw clusterError(ctx, error, 'Failed to load the blueprint fields');
   }
 }
 
