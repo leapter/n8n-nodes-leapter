@@ -21,6 +21,7 @@ import {
   engineCredentialOptions,
   readRunBase,
 } from './cluster';
+import { newestLoad } from './newest-load';
 
 /**
  * OpenAPI 3.0 Specification types
@@ -388,120 +389,40 @@ export class Leapter implements INodeType {
       async getOperationFields(
         this: ILoadOptionsFunctions,
       ): Promise<ResourceMapperFields> {
-        const fields: ResourceMapperField[] = [];
         const projectValue = this.getNodeParameter('project') as string;
         const blueprintId = this.getNodeParameter('operation') as string;
-
-        if (!projectValue || !blueprintId) {
-          return { fields };
-        }
-
         const [environment, application] = projectValue.split('::');
-        const spec = await getOpenApiSpec(this, environment, application);
-        if (spec === null) {
-          // n8n shows this notice; it does not show errors thrown here
-          return {
-            fields,
-            emptyFieldsNotice: `Access to ${application} is being activated, which takes up to a minute. Click Retry in a moment.`,
-          };
-        }
 
-        try {
-          const path = `/models/${blueprintId}/runs`;
-          const operationDef = spec.paths?.[path]?.post;
-          if (!operationDef) {
-            throw new NodeOperationError(
-              this.getNode(),
-              `Path ${path} not found in spec`,
-            );
+        // Every request takes part, an empty one too: it is the newest selection
+        return await newestLoad(fieldLoadCaller(this), async (superseded) => {
+          if (!projectValue || !blueprintId) {
+            return { fields: [] };
           }
 
-          // Process Request Body (application/json)
-          if (operationDef.requestBody) {
-            const jsonContent =
-              operationDef.requestBody.content?.['application/json'];
-
-            if (jsonContent?.schema) {
-              const schema = resolveSchema(jsonContent.schema, spec);
-              const properties = schema.properties || {};
-              const required = schema.required || [];
-
-              for (const [fieldName, fieldSchema] of Object.entries(properties)) {
-                const resolvedField = resolveSchema(fieldSchema, spec);
-                const fieldDisplayName = resolvedField.description
-                  ? `${fieldName} - ${resolvedField.description}`
-                  : fieldName;
-
-                // Handle enum types
-                if (resolvedField.enum) {
-                  fields.push({
-                    id: `body.${fieldName}`,
-                    displayName: fieldDisplayName,
-                    required: required.includes(fieldName),
-                    defaultMatch: false,
-                    display: true,
-                    type: 'options',
-                    options: resolvedField.enum.map((value) => ({
-                      name: value,
-                      value: value,
-                    })),
-                    canBeUsedToMatch: false,
-                  });
-                } else if (resolvedField.type === 'array') {
-                  // Array fields - show hint about JSON format
-                  const itemType = resolvedField.items?.type || 'string';
-                  fields.push({
-                    id: `body.${fieldName}`,
-                    displayName: `${fieldDisplayName} (JSON array)`,
-                    required: required.includes(fieldName),
-                    defaultMatch: false,
-                    display: true,
-                    type: 'string',
-                    canBeUsedToMatch: false,
-                    defaultValue:
-                      itemType === 'string' ? '["value1", "value2"]' : '[1, 2, 3]',
-                  });
-                } else {
-                  fields.push({
-                    id: `body.${fieldName}`,
-                    displayName: fieldDisplayName,
-                    required: required.includes(fieldName),
-                    defaultMatch: false,
-                    display: true,
-                    type: mapOpenApiType(resolvedField.type),
-                    canBeUsedToMatch: false,
-                  });
-                }
-              }
-            }
+          // After a project switch n8n keeps the old blueprint and asks with it once; answer at
+          // once instead of waiting for a document that cannot have its path
+          let applications: Awaited<ReturnType<typeof getApplications>>;
+          try {
+            applications = await getApplications(this, environment);
+          } catch (error) {
+            throw clusterError(this, error, 'Failed to load the blueprint fields');
+          }
+          const callable = applications.find((entry) => entry.slug === application)?.callable;
+          if (!callable?.some((blueprint) => blueprint.id === blueprintId)) {
+            return { fields: [] };
           }
 
-          if (fields.length === 0) {
-            // One hidden placeholder, so the schema has an entry: the activation notice hides (n8n
-            // ignores a hide rule on an empty list) and the no-inputs notice shows. execute() never
-            // sends it: only `body.` fields go into the body, so a run of such a blueprint sends {}.
+          const spec = await getOpenApiSpec(this, environment, application, superseded);
+          if (spec === null) {
+            // n8n shows this notice; it does not show errors thrown here
             return {
-              fields: [
-                {
-                  id: NO_INPUTS_FIELD,
-                  displayName: 'This blueprint takes no inputs',
-                  required: false,
-                  defaultMatch: false,
-                  display: false,
-                  type: 'string',
-                  canBeUsedToMatch: false,
-                },
-              ],
+              fields: [],
+              emptyFieldsNotice: `Access to ${application} is being activated, which takes up to a minute. Click Retry in a moment.`,
             };
           }
-          return { fields };
-        } catch (error) {
-          const err = error as Error;
-          throw new NodeOperationError(
-            this.getNode(),
-            `Failed to load operation fields: ${err.message}`,
-          );
-        }
+
+          return operationFields(this, spec, blueprintId);
+        });
       },
     },
   };
@@ -706,15 +627,123 @@ async function prewarm(
 }
 
 /**
+ * Who asks for the field list: the n8n user and the credential, or undefined when n8n does not
+ * say. The user id is not in n8n's node API; n8n 2.44 passes it in the context's additionalData.
+ */
+function fieldLoadCaller(ctx: ILoadOptionsFunctions): string | undefined {
+  const userId = (ctx as unknown as { additionalData?: { userId?: string } }).additionalData
+    ?.userId;
+  const credentialId = ctx.getNode().credentials?.[CREDENTIAL_TYPE]?.id;
+  return userId && credentialId ? `${userId}/${credentialId}` : undefined;
+}
+
+/**
+ * The input fields of the blueprint's POST /models/{id}/runs request body
+ */
+function operationFields(
+  ctx: ILoadOptionsFunctions,
+  spec: OpenAPISpec,
+  blueprintId: string,
+): ResourceMapperFields {
+  const fields: ResourceMapperField[] = [];
+  try {
+    const path = `/models/${blueprintId}/runs`;
+    const operationDef = spec.paths?.[path]?.post;
+    if (!operationDef) {
+      throw new NodeOperationError(ctx.getNode(), `Path ${path} not found in spec`);
+    }
+
+    // Process Request Body (application/json)
+    const jsonContent = operationDef.requestBody?.content?.['application/json'];
+    if (jsonContent?.schema) {
+      const schema = resolveSchema(jsonContent.schema, spec);
+      const properties = schema.properties || {};
+      const required = schema.required || [];
+
+      for (const [fieldName, fieldSchema] of Object.entries(properties)) {
+        const resolvedField = resolveSchema(fieldSchema, spec);
+        const fieldDisplayName = resolvedField.description
+          ? `${fieldName} - ${resolvedField.description}`
+          : fieldName;
+
+        // Handle enum types
+        if (resolvedField.enum) {
+          fields.push({
+            id: `body.${fieldName}`,
+            displayName: fieldDisplayName,
+            required: required.includes(fieldName),
+            defaultMatch: false,
+            display: true,
+            type: 'options',
+            options: resolvedField.enum.map((value) => ({
+              name: value,
+              value: value,
+            })),
+            canBeUsedToMatch: false,
+          });
+        } else if (resolvedField.type === 'array') {
+          // Array fields - show hint about JSON format
+          const itemType = resolvedField.items?.type || 'string';
+          fields.push({
+            id: `body.${fieldName}`,
+            displayName: `${fieldDisplayName} (JSON array)`,
+            required: required.includes(fieldName),
+            defaultMatch: false,
+            display: true,
+            type: 'string',
+            canBeUsedToMatch: false,
+            defaultValue: itemType === 'string' ? '["value1", "value2"]' : '[1, 2, 3]',
+          });
+        } else {
+          fields.push({
+            id: `body.${fieldName}`,
+            displayName: fieldDisplayName,
+            required: required.includes(fieldName),
+            defaultMatch: false,
+            display: true,
+            type: mapOpenApiType(resolvedField.type),
+            canBeUsedToMatch: false,
+          });
+        }
+      }
+    }
+  } catch (error) {
+    const err = error as Error;
+    throw new NodeOperationError(ctx.getNode(), `Failed to load operation fields: ${err.message}`);
+  }
+
+  if (fields.length === 0) {
+    // One hidden placeholder, so the schema has an entry: the activation notice hides (n8n
+    // ignores a hide rule on an empty list) and the no-inputs notice shows. execute() never
+    // sends it: only `body.` fields go into the body, so a run of such a blueprint sends {}.
+    return {
+      fields: [
+        {
+          id: NO_INPUTS_FIELD,
+          displayName: 'This blueprint takes no inputs',
+          required: false,
+          defaultMatch: false,
+          display: false,
+          type: 'string',
+          canBeUsedToMatch: false,
+        },
+      ],
+    };
+  }
+  return { fields };
+}
+
+/**
  * The project's OpenAPI document from the engine, or null when access is still being activated
- * (401 or 404) after the last retry. This request gets the project's evaluation key from the
- * credential; its first refusal makes the credential create the key, so the key exists before
- * the workflow first runs.
+ * (401 or 404) after the last retry, or when a newer field load superseded this one. This
+ * request gets the project's evaluation key from the credential; its first refusal makes the
+ * credential create the key, so the key exists before the workflow first runs.
  */
 async function getOpenApiSpec(
   ctx: ILoadOptionsFunctions,
   environment: string,
   application: string,
+  superseded: () => boolean,
 ): Promise<OpenAPISpec | null> {
   const runBase = await readRunBase(ctx, await clusterUrlOf(ctx));
   assertHttps(ctx, runBase);
@@ -738,10 +767,13 @@ async function getOpenApiSpec(
       if (!isActivating(error)) {
         throw clusterError(ctx, error, 'Failed to load the blueprint fields');
       }
-      if (retries >= MAX_RETRIES) {
+      if (retries >= MAX_RETRIES || superseded()) {
         return null;
       }
       await sleep(RETRY_INTERVAL_MS);
+      if (superseded()) {
+        return null;
+      }
     }
   }
 }
