@@ -8,11 +8,11 @@ import type {
   ResourceMapperFields,
   ResourceMapperField,
   FieldType,
-  IHttpRequestMethods,
+  IHttpRequestOptions,
   IDataObject,
   JsonObject,
 } from 'n8n-workflow';
-import { NodeApiError, NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
+import { NodeApiError, NodeConnectionTypes, NodeOperationError, sleep } from 'n8n-workflow';
 import { assertHttps, clusterUrlOf, readRunBase } from './cluster';
 
 /**
@@ -100,6 +100,12 @@ interface StatusAnswer {
  * Credential type name for Leapter API Key
  */
 const CREDENTIAL_TYPE = 'leapterApi';
+
+/**
+ * How long and how often a run is resent while the project's key or deploy activates
+ */
+const RETRY_WINDOW_MS = 90_000;
+const RETRY_INTERVAL_MS = 3_000;
 
 export class Leapter implements INodeType {
   description: INodeTypeDescription = {
@@ -473,16 +479,21 @@ export class Leapter implements INodeType {
       );
     }
 
+    // The address the cluster answers runs on, once per execution
+    const runBase = await readRunBase(this, await clusterUrlOf(this));
+    assertHttps(this, runBase);
+
     for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
       try {
-        const operation = this.getNodeParameter('operation', itemIndex) as string;
+        // Saved values: project = environment::application, operation = blueprint id
+        const [environment, application] = (
+          this.getNodeParameter('project', itemIndex) as string
+        ).split('::');
+        const blueprintId = this.getNodeParameter('operation', itemIndex) as string;
         const inputMode = this.getNodeParameter('inputMode', itemIndex) as string;
         const options = this.getNodeParameter('options', itemIndex, {}) as {
           timeout?: number;
         };
-
-        // Parse operation: method::path::operationUrl
-        const [method, , operationUrl] = operation.split('::');
 
         // Get parameters
         let bodyParams: IDataObject = {};
@@ -511,19 +522,11 @@ export class Leapter implements INodeType {
           bodyParams = JSON.parse(parametersJson) as IDataObject;
         }
 
-        // Build request options (X-API-Key added automatically by credential authenticate)
-        const requestOptions: {
-          method: IHttpRequestMethods;
-          url: string;
-          headers: Record<string, string>;
-          body: IDataObject;
-          json: boolean;
-          timeout?: number;
-          returnFullResponse: boolean;
-          ignoreHttpStatusErrors: boolean;
-        } = {
-          method: method.toUpperCase() as IHttpRequestMethods,
-          url: operationUrl,
+        // The credential adds the project's evaluation key. HTTP errors must throw: n8n
+        // re-runs the credential's preAuthentication only when a request throws a 401.
+        const requestOptions: IHttpRequestOptions = {
+          method: 'POST',
+          url: `${runBase}/runtime/api/v1/${environment}/${application}/models/${blueprintId}/runs`,
           headers: {
             'X-Correlation-Id': executionId || '',
             'Content-Type': 'application/json',
@@ -531,7 +534,7 @@ export class Leapter implements INodeType {
           body: bodyParams,
           json: true,
           returnFullResponse: true,
-          ignoreHttpStatusErrors: true, // Don't throw on non-2xx status
+          disableFollowRedirect: true,
         };
 
         // Add timeout option
@@ -539,64 +542,34 @@ export class Leapter implements INodeType {
           requestOptions.timeout = options.timeout;
         }
 
-        // Execute request using authenticated helper
-        const response = await this.helpers.httpRequestWithAuthentication.call(
-          this,
-          CREDENTIAL_TYPE,
-          requestOptions,
-        );
-
-        // Handle response based on type
-        let responseBody: IDataObject;
-        let responseHeaders: Record<string, string> = {};
-        let statusCode = 200;
-
-        if (typeof response === 'object' && response !== null) {
-          if ('body' in response && 'headers' in response) {
-            // Full response object
-            responseBody =
-              typeof response.body === 'string'
-                ? JSON.parse(response.body)
-                : response.body;
-            responseHeaders = response.headers as Record<string, string>;
-            statusCode = (response.statusCode as number) || 200;
-          } else {
-            // Direct response
-            responseBody = response as IDataObject;
+        // A new key answers 401 and a new deploy 404 for up to a minute; n8n itself retries
+        // only once, immediately
+        const firstAttempt = Date.now();
+        let response: { body: unknown; headers: Record<string, string> };
+        for (;;) {
+          try {
+            response = await this.helpers.httpRequestWithAuthentication.call(
+              this,
+              CREDENTIAL_TYPE,
+              requestOptions,
+            );
+            break;
+          } catch (error) {
+            const httpCode = (error as { httpCode?: string | null }).httpCode;
+            const activating = httpCode === '401' || httpCode === '404';
+            if (!activating || Date.now() - firstAttempt >= RETRY_WINDOW_MS) {
+              throw new NodeApiError(this.getNode(), error as JsonObject);
+            }
+            await sleep(RETRY_INTERVAL_MS);
           }
-        } else if (typeof response === 'string') {
-          responseBody = JSON.parse(response);
-        } else {
-          responseBody = {};
         }
 
-        // Check for error status
-        if (statusCode >= 400) {
-          const errorMessage =
-            (responseBody.detail as string) ||
-            (responseBody.error as string) ||
-            (responseBody.message as string) ||
-            `Request failed with status ${statusCode}`;
-
-          if (this.continueOnFail()) {
-            returnData.push({
-              json: {
-                error: errorMessage,
-                statusCode,
-                ...responseBody,
-              },
-              pairedItem: { item: itemIndex },
-            });
-            continue;
-          }
-
-          throw new NodeOperationError(this.getNode(), errorMessage, {
-            itemIndex,
-          });
-        }
+        const responseBody = (
+          typeof response.body === 'string' ? JSON.parse(response.body) : response.body ?? {}
+        ) as IDataObject;
 
         // Extract runId from response header
-        const runId = responseHeaders['x-run-id'] || responseHeaders['X-Run-Id'];
+        const runId = response.headers['x-run-id'] || response.headers['X-Run-Id'];
 
         // Return output data with metadata
         returnData.push({
@@ -609,9 +582,31 @@ export class Leapter implements INodeType {
           pairedItem: { item: itemIndex },
         });
       } catch (error) {
-        const err = error as Error;
+        const err = error as Error & {
+          httpCode?: string | null;
+          context?: { data?: IDataObject };
+        };
 
         if (this.continueOnFail()) {
+          if (err.httpCode) {
+            const statusCode = Number(err.httpCode);
+            const responseBody = err.context?.data ?? {};
+            const errorMessage =
+              (responseBody.detail as string) ||
+              (responseBody.error as string) ||
+              (responseBody.message as string) ||
+              `Request failed with status ${statusCode}`;
+            returnData.push({
+              json: {
+                error: errorMessage,
+                statusCode,
+                ...responseBody,
+              },
+              pairedItem: { item: itemIndex },
+            });
+            continue;
+          }
+
           returnData.push({
             json: {
               error: err.message,
