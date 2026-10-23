@@ -31,7 +31,7 @@ Docker, `jq`, and Playwright's Chromium and ffmpeg (`npx playwright install chro
 |---|---------|-----------|
 | 1 | Install the Leapter node in n8n | The nodes panel finds the installed Leapter node |
 | 2 | Add your Runtime Cluster and the n8n service key | New credential "Leapter API": the key pasted; Advanced Settings opened, showing the default Leapter Server `https://runtime.leapter.com`, which the local take replaces with the local cluster; Save, then the test ("Retry" in n8n's result banner) answers "Connection tested successfully" |
-| 3 | Pick environment, project and blueprint | Manual Trigger → Leapter; project `insurance-claim-triage` (no environment choice: the key reaches one) and "Insurance Claim Triage"; the field list shows the node's notice "Access to insurance-claim-triage is being activated…" until n8n's "Retry" loads the input fields |
+| 3 | Pick project and blueprint | Manual Trigger → Leapter; project `insurance-claim-triage` (no environment choice: the key reaches one) and "Insurance Claim Triage"; n8n shows its loading state ("Fetching parameters") while the node waits for the project's new key, then the input fields, with no Retry click. Only if the key is not active after the node's 6 retries does the list show "No input fields to show. Retry" with the activation notice (the script then clicks Retry) |
 | 4 | Enter a claim | The claim below is entered |
 | 5 | Run it | Execute workflow |
 | 6 | The decision comes back with its trace id | The output (JSON): `outputData.decision` and `_metadata.runId` |
@@ -51,10 +51,24 @@ policy within limit" (expects `approve`):
 (`-ss <sec> -i in.webm -c:v libvpx -b:v 3M -crf 10 out.webm`), writes the caption marks to
 `recordings/marks.json`, then checks the video: it plays it in headless Chromium and saves one frame per
 caption as `recordings/caption-<n>.png` when `currentTime` passes each mark (1.2 s before the next caption, so
-the frame shows what the step achieved), plus `recordings/activation-notice.png` while the activation notice
-shows, and fails unless the length is
+the frame shows what the step achieved), plus `recordings/fields-loading.png` while n8n loads the fields in
+step 3 (and `recordings/demo-activation-notice.png` if the fallback notice appeared), and fails unless the length is
 60–120 s and the seven captions come in order, each for at least 2.5 s. `--verify` repeats only
 this check.
 
+`marks.json` also records `fieldsWait`: the seconds between choosing the blueprint and the fields appearing.
+
 **Cleanup:** revokes the evaluation key the credential created and the service key, and removes
 n8n (`--keep` skips this).
+
+## Other fixtures
+
+`--deploy-only` releases and deploys another Lab project the same way, for example the Dev Team
+project **"n8n no-inputs fixture"** (`9fe2d667-e975-40c6-bcc9-8310dcde9566`, blueprint "Health
+Check": no inputs, answers `{"status": "ok"}`), which shows the node's "This blueprint takes no
+inputs" notice:
+
+```bash
+LAB_PROJECT_ID=9fe2d667-e975-40c6-bcc9-8310dcde9566 APPLICATION=n8n-no-inputs-fixture \
+  node e2e/demo/record.mjs --deploy-only
+```

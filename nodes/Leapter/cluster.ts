@@ -1,5 +1,6 @@
 import type { IExecuteFunctions, ILoadOptionsFunctions, JsonObject } from 'n8n-workflow';
 import { NodeApiError, NodeOperationError } from 'n8n-workflow';
+import { parseKeyMap } from '../../credentials/eval-keys';
 
 type Context = IExecuteFunctions | ILoadOptionsFunctions;
 
@@ -36,6 +37,28 @@ export async function clusterUrlOf(ctx: Context): Promise<string> {
   const clusterUrl = String(credentials.clusterUrl || DEFAULT_CLUSTER_URL).replace(/\/+$/, '');
   assertHttps(ctx, clusterUrl);
   return clusterUrl;
+}
+
+/**
+ * Credential options for an engine request (the third argument of httpRequestWithAuthentication).
+ * A project that has never had an evaluation key is not served: its engine answers 404, not 401,
+ * and n8n re-runs the credential's preAuthentication only on 401 unless told otherwise. So while
+ * the credential holds no key for the project, a 404 makes it create one too. With a key, 404
+ * stays a plain "not routed yet" and never replaces the key.
+ */
+export async function engineCredentialOptions(
+  ctx: Context,
+  environment: string,
+  application: string,
+): Promise<Parameters<IExecuteFunctions['helpers']['httpRequestWithAuthentication']>[2]> {
+  const credentials = await ctx.getCredentials('leapterApi');
+  if (parseKeyMap(credentials.evalKeys)[`${environment}/${application}`]) {
+    return undefined;
+  }
+  // Honoured by n8n's request helper (2.44.5); not yet in n8n-workflow's published types
+  return { preAuthenticationRetryStatusCode: [401, 404] } as Parameters<
+    IExecuteFunctions['helpers']['httpRequestWithAuthentication']
+  >[2];
 }
 
 /**

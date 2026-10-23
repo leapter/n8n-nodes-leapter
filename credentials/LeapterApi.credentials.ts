@@ -7,7 +7,7 @@ import type {
   IHttpRequestOptions,
   INodeProperties,
 } from 'n8n-workflow';
-import { GRACE_MS, lastUsed, parseKeyMap, pending } from './eval-keys';
+import { GRACE_MS, lastRequested, lastUsed, parseKeyMap, pending } from './eval-keys';
 
 /**
  * Leapter's hosted cluster. n8n leaves `clusterUrl` out of the credential data while Advanced
@@ -94,6 +94,7 @@ export class LeapterApi implements ICredentialType {
       const match = path.match(/\/runtime\/api\/v1\/([^/]+)\/([^/]+)\//);
       if (match) {
         const project = `${match[1]}/${match[2]}`;
+        lastRequested.project = project;
         const entry = parseKeyMap(credentials.evalKeys)[project];
         if (entry) {
           headers['X-API-Key'] = entry.key;
@@ -138,11 +139,13 @@ export class LeapterApi implements ICredentialType {
       pending.delete(project);
     }
 
-    // The 401 belongs to the request authenticated last. Replace its key only when that key is
-    // past the grace period and still the stored one; other projects' keys are left alone.
-    const last = [...lastUsed].sort(([, a], [, b]) => b.at - a.at)[0];
-    if (last) {
-      const [project, { keyId }] = last;
+    // The refusal belongs to the request authenticated last. Replace that project's key only when
+    // it was sent, is past the grace period and is still the stored one; a keyless first use
+    // never touches another project's key.
+    const project = lastRequested.project;
+    const used = project ? lastUsed.get(project) : undefined;
+    if (project && used) {
+      const { keyId } = used;
       const stored = map[project];
       if (stored && stored.id === keyId && Date.now() - stored.mintedAt > GRACE_MS) {
         await mint(project);

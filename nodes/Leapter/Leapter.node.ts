@@ -13,7 +13,14 @@ import type {
   JsonObject,
 } from 'n8n-workflow';
 import { NodeApiError, NodeConnectionTypes, NodeOperationError, sleep } from 'n8n-workflow';
-import { answerOf, assertHttps, clusterError, clusterUrlOf, readRunBase } from './cluster';
+import {
+  answerOf,
+  assertHttps,
+  clusterError,
+  clusterUrlOf,
+  engineCredentialOptions,
+  readRunBase,
+} from './cluster';
 
 /**
  * OpenAPI 3.0 Specification types
@@ -102,10 +109,16 @@ interface StatusAnswer {
 const CREDENTIAL_TYPE = 'leapterApi';
 
 /**
- * How long and how often a run is resent while the project's key or deploy activates
+ * While a project's new key or deploy activates (401 or 404, up to a minute), the field list and
+ * a run ask again every 10 s, at most 6 times after the first request: 7 requests over 60 s
  */
-const RETRY_WINDOW_MS = 90_000;
-const RETRY_INTERVAL_MS = 3_000;
+const RETRY_INTERVAL_MS = 10_000;
+const MAX_RETRIES = 6;
+
+function isActivating(error: unknown): boolean {
+  const httpCode = (error as { httpCode?: string | null }).httpCode;
+  return httpCode === '401' || httpCode === '404';
+}
 
 export class Leapter implements INodeType {
   description: INodeTypeDescription = {
@@ -203,6 +216,8 @@ export class Leapter implements INodeType {
             },
             addAllFields: true,
             multiKeyMatch: false,
+            // Replaces n8n's "No parameters found in Leapter"; the node's notice says why
+            noFieldsError: 'No input fields to show.',
           },
         },
         displayOptions: {
@@ -518,18 +533,25 @@ export class Leapter implements INodeType {
         // only once, immediately
         const firstAttempt = Date.now();
         let response: { body: unknown; headers: Record<string, string> };
-        for (;;) {
+        for (let retries = 0; ; retries++) {
           try {
             response = await this.helpers.httpRequestWithAuthentication.call(
               this,
               CREDENTIAL_TYPE,
               requestOptions,
+              await engineCredentialOptions(this, environment, application),
             );
+            if (retries > 0) {
+              const waited = Math.round((Date.now() - firstAttempt) / 1000);
+              this.addExecutionHints({
+                message: `Access to ${application} was activated; this run waited ${waited} s.`,
+                type: 'info',
+                location: 'outputPane',
+              });
+            }
             break;
           } catch (error) {
-            const httpCode = (error as { httpCode?: string | null }).httpCode;
-            const activating = httpCode === '401' || httpCode === '404';
-            if (!activating || Date.now() - firstAttempt >= RETRY_WINDOW_MS) {
+            if (!isActivating(error) || retries >= MAX_RETRIES) {
               throw new NodeApiError(this.getNode(), error as JsonObject);
             }
             await sleep(RETRY_INTERVAL_MS);
@@ -598,9 +620,10 @@ async function getApplications(
 }
 
 /**
- * The project's OpenAPI document from the engine, or null while access is being activated
- * (401 or 404). This request gets the project's evaluation key from the credential; the first
- * 401 makes the credential create it, so the key exists before the workflow first runs.
+ * The project's OpenAPI document from the engine, or null when access is still being activated
+ * (401 or 404) after the last retry. This request gets the project's evaluation key from the
+ * credential; its first refusal makes the credential create the key, so the key exists before
+ * the workflow first runs.
  */
 async function getOpenApiSpec(
   ctx: ILoadOptionsFunctions,
@@ -610,19 +633,30 @@ async function getOpenApiSpec(
   const runBase = await readRunBase(ctx, await clusterUrlOf(ctx));
   assertHttps(ctx, runBase);
 
-  try {
-    return (await ctx.helpers.httpRequestWithAuthentication.call(ctx, CREDENTIAL_TYPE, {
-      method: 'GET',
-      url: `${runBase}/runtime/api/v1/${environment}/${application}/openapi`,
-      json: true,
-      disableFollowRedirect: true,
-    })) as OpenAPISpec;
-  } catch (error) {
-    const httpCode = (error as { httpCode?: string | null }).httpCode;
-    if (httpCode === '401' || httpCode === '404') {
-      return null;
+  // The editor shows its loading state meanwhile; after the last retry the caller shows the
+  // activation notice with n8n's Retry
+  for (let retries = 0; ; retries++) {
+    try {
+      return (await ctx.helpers.httpRequestWithAuthentication.call(
+        ctx,
+        CREDENTIAL_TYPE,
+        {
+          method: 'GET',
+          url: `${runBase}/runtime/api/v1/${environment}/${application}/openapi`,
+          json: true,
+          disableFollowRedirect: true,
+        },
+        await engineCredentialOptions(ctx, environment, application),
+      )) as OpenAPISpec;
+    } catch (error) {
+      if (!isActivating(error)) {
+        throw clusterError(ctx, error, 'Failed to load the blueprint fields');
+      }
+      if (retries >= MAX_RETRIES) {
+        return null;
+      }
+      await sleep(RETRY_INTERVAL_MS);
     }
-    throw clusterError(ctx, error, 'Failed to load the blueprint fields');
   }
 }
 

@@ -47,7 +47,7 @@ const DEMO_INPUT = {
 const CAPTIONS = [
 	'Install the Leapter node in n8n',
 	'Add your Runtime Cluster and the n8n service key',
-	'Pick environment, project and blueprint',
+	'Pick project and blueprint',
 	'Enter a claim',
 	'Run it',
 	'The decision comes back with its trace id',
@@ -81,6 +81,7 @@ Inputs (environment variables, all optional):
 
 Flags:
   --verify   only check an existing video: length, and one still per caption
+  --deploy-only  only release LAB_PROJECT_ID and deploy it as APPLICATION (e.g. another fixture)
   --keep     keep n8n running and the keys unrevoked`);
 }
 
@@ -255,6 +256,7 @@ async function record(browser, labState, serviceKey) {
 	const videoStart = Date.now();
 	const marks = [];
 	const extras = [];
+	let fieldsWait = null;
 	let caption = '';
 	page.on('load', () => void setCaption(page, caption));
 
@@ -355,26 +357,30 @@ async function record(browser, labState, serviceKey) {
 		// One environment: the project is listed by its slug; several: "environment · slug"
 		await pick('project', APPLICATION);
 		await pick('operation', /./);
-		// A new project key answers 401 until the engines pick it up; the node says so in the
-		// field list's notice, and n8n's "Retry" loads the list again
+		// The node waits for a new project key itself (up to 6 retries, 10 s apart): n8n shows
+		// its loading state, then the fields. Its notice with Retry is only the fallback.
+		const picked = Date.now();
 		const firstField = mapper.locator(N(`parameter-input-body.${Object.keys(DEMO_INPUT)[0]}`));
 		const notice = page.locator(N('empty-fields-notice'));
-		await Promise.race([notice.waitFor({ timeout: 30_000 }), firstField.waitFor({ timeout: 30_000 })]);
-		if (await notice.isVisible()) {
-			const text = (await notice.innerText()).trim();
-			if (!text.includes('is being activated')) throw new Error(`Unexpected notice: ${text}`);
-			extras.push({ name: 'activation-notice', at: (Date.now() - videoStart) / 1000, text });
-			log(`notice: ${text}`);
+		if (await mapper.getByText(/Fetching/).first().isVisible().catch(() => false)) {
+			extras.push({ name: 'fields-loading', at: (Date.now() - videoStart) / 1000 + 0.5 });
 		}
-		const started = Date.now();
-		while (!(await firstField.isVisible())) {
-			if (Date.now() - started > 90_000) throw new Error('The blueprint fields did not load within 90 s.');
-			await sleep(4_000);
-			const retry = mapper.getByText('Retry', { exact: true });
-			if (!(await retry.count())) throw new Error('The field list shows no Retry to load it again.');
-			await retry.first().click();
-			await sleep(1_500);
+		await Promise.race([
+			firstField.waitFor({ timeout: 90_000 }),
+			notice.waitFor({ timeout: 90_000 }),
+		]);
+		if (!(await firstField.isVisible()) && (await notice.isVisible())) {
+			extras.push({ name: 'demo-activation-notice', at: (Date.now() - videoStart) / 1000 });
+			log(`notice (fallback): ${(await notice.innerText()).trim()}`);
+			while (!(await firstField.isVisible())) {
+				if (Date.now() - picked > 180_000) throw new Error('The blueprint fields did not load.');
+				await sleep(4_000);
+				await mapper.getByText('Retry', { exact: true }).first().click();
+				await sleep(1_500);
+			}
 		}
+		fieldsWait = Math.round((Date.now() - picked) / 1000);
+		log(`the editor waited ${fieldsWait} s for the fields`);
 		await sleep(1_500);
 	});
 
@@ -456,7 +462,7 @@ async function record(browser, labState, serviceKey) {
 	const video = page.video();
 	await context.close();
 	const raw = await video.path();
-	return { raw, marks, extras, runId };
+	return { raw, marks, extras, runId, fieldsWait };
 }
 
 // --- Trim and check -------------------------------------------------------------------------
@@ -569,6 +575,12 @@ async function main() {
 			return;
 		}
 		const adminKey = bootstrapAdminKey();
+		if (args.includes('--deploy-only')) {
+			await releaseAndDeploy(browser);
+			const callable = await waitUntilCallable(adminKey);
+			log(`cluster: ${ENVIRONMENT}/${APPLICATION} calls ${callable.map((entry) => `${entry.name} (${entry.id})`).join(', ')}`);
+			return;
+		}
 		let service;
 		try {
 			log('Lab: release and deploy');
@@ -578,8 +590,9 @@ async function main() {
 			service = prepareServiceKey();
 			log('n8n: starting');
 			await startN8n();
-			const { raw, marks, extras, runId } = await record(browser, labState, service.key);
-			writeFileSync(MARKS, JSON.stringify(trim(raw, marks, extras), null, 2));
+			const { raw, marks, extras, runId, fieldsWait } = await record(browser, labState, service.key);
+			writeFileSync(MARKS, JSON.stringify({ ...trim(raw, marks, extras), fieldsWait }, null, 2));
+			log(`fields appeared ${fieldsWait} s after the blueprint was picked, without a Retry click`);
 			log(`recorded run ${runId}`);
 			await verify(browser);
 		} finally {
