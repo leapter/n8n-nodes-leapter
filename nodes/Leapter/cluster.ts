@@ -1,27 +1,14 @@
 import type { IExecuteFunctions, ILoadOptionsFunctions, JsonObject } from 'n8n-workflow';
 import { NodeApiError, NodeOperationError } from 'n8n-workflow';
-import { parseKeyMap } from '../../credentials/eval-keys';
+import { clusterBaseUrl, isSecureAddress, parseKeyMap } from '../../credentials/eval-keys';
 
 type Context = IExecuteFunctions | ILoadOptionsFunctions;
-
-/**
- * Leapter's hosted cluster. n8n leaves the credential's `clusterUrl` out while its Advanced
- * Settings are off (same default as credentials/LeapterApi.credentials.ts).
- */
-const DEFAULT_CLUSTER_URL = 'https://runtime.leapter.com';
 
 /**
  * Refuses any address that is not https://, except on this machine
  */
 export function assertHttps(ctx: Context, url: string): void {
-  let parsed: URL | undefined;
-  try {
-    parsed = new URL(url);
-  } catch {
-    parsed = undefined;
-  }
-  const local = parsed?.hostname === 'localhost' || parsed?.hostname === '127.0.0.1';
-  if (parsed?.protocol !== 'https:' && !local) {
+  if (!isSecureAddress(url)) {
     throw new NodeOperationError(
       ctx.getNode(),
       `The address ${url} is not https://. Only localhost may be reached without it.`,
@@ -34,7 +21,7 @@ export function assertHttps(ctx: Context, url: string): void {
  */
 export async function clusterUrlOf(ctx: Context): Promise<string> {
   const credentials = await ctx.getCredentials('leapterApi');
-  const clusterUrl = String(credentials.clusterUrl || DEFAULT_CLUSTER_URL).replace(/\/+$/, '');
+  const clusterUrl = clusterBaseUrl(credentials.clusterUrl);
   assertHttps(ctx, clusterUrl);
   return clusterUrl;
 }
@@ -152,7 +139,11 @@ interface ProblemBody {
   detail?: unknown;
   title?: unknown;
   errors?: Array<{ field?: unknown; message?: unknown }>;
-  properties?: { exception?: { type?: unknown } };
+  properties?: {
+    exception?: { type?: unknown };
+    // The blueprint's own errors (genielabs `apps/runtime/src/http/execute-handler.ts`)
+    errorOutput?: Array<{ detail?: unknown; title?: unknown }>;
+  };
 }
 
 /**
@@ -174,7 +165,9 @@ export function describeClusterError(
 
   switch (status) {
     case 403:
-      return 'The cluster refused the service key. It was revoked or has no rights here. Create a new key in the Admin UI: Service accounts → n8n → Create key.';
+      // The cluster answers the same for a revoked key and for an environment the key has no
+      // rights in (renamed, or its grants changed)
+      return 'The cluster refused the request. The service key was revoked, or it has no rights in this environment. Check the key in the Admin UI: Service accounts → n8n.';
     case 401:
       return "The project's access key is not active yet or was revoked. Try again in a minute.";
     case 404:
@@ -189,6 +182,14 @@ export function describeClusterError(
       return [fallback, ...lines].join('\n');
     }
     case 500: {
+      // An error the blueprint raised names its own reason; the exception type adds nothing then
+      const errorOutput = problem?.properties?.errorOutput;
+      const reasons = (Array.isArray(errorOutput) ? errorOutput : [])
+        .map((entry) => entry?.detail || entry?.title)
+        .filter((reason): reason is string => typeof reason === 'string' && reason !== '');
+      if (reasons.length > 0) {
+        return [fallback, ...reasons].join('\n');
+      }
       const exception = problem?.properties?.exception?.type;
       return typeof exception === 'string' ? `${fallback}\nException: ${exception}` : fallback;
     }

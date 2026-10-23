@@ -29,7 +29,7 @@
 		"dev": "n8n-node dev",
 		"lint": "n8n-node lint",
 		"lint:fix": "n8n-node lint --fix",
-		"test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test test/",
+		"test": "tsc && node --test test/",
 		"e2e": "bash e2e/run.sh",
 		"prepublishOnly": "n8n-node prerelease"
 	},

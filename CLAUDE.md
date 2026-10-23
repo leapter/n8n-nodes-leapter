@@ -17,7 +17,7 @@ pnpm build            # Compile TypeScript to dist/
 pnpm lint             # Check for lint errors
 pnpm lint:fix         # Auto-fix lint errors
 pnpm dev              # Start dev mode with n8n
-pnpm test             # Unit tests (node:test, test/*.test.mjs)
+pnpm test             # tsc, then unit tests (node:test, test/*.test.mjs against dist/)
 pnpm e2e              # n8n in Docker against a Runtime Cluster (e2e/README.md)
 ```
 
@@ -35,7 +35,7 @@ Releases are cut from the GitHub Releases UI (draft a release with a `vX.Y.Z` ta
 │   └── leapter.svg        # Node icon
 ├── credentials/
 │   ├── LeapterApi.credentials.ts  # Service key credential, per-project evaluation keys
-│   └── eval-keys.ts       # Evaluation key map, grace period, authenticate ↔ preAuthentication side channel
+│   └── eval-keys.ts       # Evaluation key map, grace period, authenticate ↔ preAuthentication side channel, cluster address rules
 ├── dist/                  # Build output (git-ignored)
 └── package.json           # n8n node registration
 ```
@@ -106,16 +106,16 @@ Parsed via array destructuring: `const [environment, application] = project.spli
 - `POST {runBase}/runtime/api/v1/{env}/{app}/models/{blueprintId}/runs` - Executes a blueprint
 - `GET {origin}/runtime-management/ui/config.json` - Public, no credential: `runBaseUrl`, or the origin when null, 404 or 410 (same rule as the genielabs CLI)
 
-All requests use `disableFollowRedirect: true`; `assertHttps()` refuses non-https addresses except `localhost`/`127.0.0.1`.
+All requests use `disableFollowRedirect: true`; `assertHttps()` refuses non-https addresses except `localhost`/`127.0.0.1` (`isSecureAddress()`), and `authenticate` refuses them too before adding any key, the credential test included. `clusterBaseUrl()` (`credentials/eval-keys.ts`) reads the credential's address: the default when unset, without trailing slashes or a pasted `/runtime-management/…` path.
 
 ### Authentication and Key Handling
 - The credential holds a key of the cluster's `n8n` service account (`serviceKey`, `lk_mgmt_…`). The control plane takes it; the engines take only per-project evaluation keys.
-- `authenticate` routes by URL path: `/runtime-management/` gets `Authorization: Bearer <serviceKey>`, `/runtime/api/v1/{env}/{app}/` gets `X-API-Key` from the hidden expirable field `evalKeys` (JSON map `{ "env/app": { id, key, mintedAt } }`).
-- `preAuthentication` (n8n calls it when `evalKeys` is empty and after every 401) creates a key for each project that was requested without one and replaces a rejected key once it is older than the 90 s grace period (`GRACE_MS`, `credentials/eval-keys.ts`): mint, then revoke the old id. Only the project of the request authenticated last (`lastRequested`) is considered for replacement. A fresh key answers 401 for up to 60 s, so a younger key is never replaced. n8n stores the returned `evalKeys`.
+- `authenticate` routes by URL path: `/runtime-management/` gets `Authorization: Bearer <serviceKey>`, `/runtime/api/v1/{env}/{app}/` gets `X-API-Key` from the hidden expirable field `evalKeys` (JSON map `{ "env/app": { id, key, mintedAt } }`). `evalKeys` is also a `password` field: n8n redacts it before the editor gets the credential and puts the stored value back on save. Read it in tests with `n8n export:credentials --decrypted`, not the REST API.
+- `preAuthentication` (n8n calls it when `evalKeys` is empty and after every 401) creates a key for each project that was requested without one and replaces a rejected key once it is older than the 90 s grace period (`GRACE_MS`, `credentials/eval-keys.ts`): mint, then revoke the old id. Only the project of the request authenticated last (`lastRequested`) is considered for replacement. A fresh key answers 401 for up to 60 s, so a younger key is never replaced. n8n stores the returned `evalKeys`. A project leaves `pending` before its key is created, and only the requested project's refusal fails the request, so one refused project (gone, or an environment without rights) does not block every later key.
 - A project that has never had a key is not served: its engine answers 404, not 401. While the credential holds no key for the project, engine requests pass `preAuthenticationRetryStatusCode: [401, 404]` (`engineCredentialOptions()`, `nodes/Leapter/cluster.ts`), so a 404 also makes `preAuthentication` create the key.
 - `authenticate` and `preAuthentication` share a module-level side channel (`pending`, `lastUsed` in `credentials/eval-keys.ts`), because n8n gives `preAuthentication` only the credential data.
-- `getOperationFields` and `execute` ask again on 401 or 404 (a new key or a new deploy) every `RETRY_INTERVAL_MS` (10 s), at most `MAX_RETRIES` (6) times: 7 requests over 60 s. Then the field list shows the activation notice and a run rethrows. A run that needed retries adds the execution hint "Access to <application> was activated; this run waited <n> s." n8n 2.44.5 keeps a 60 s load-options request open. Never set `ignoreHttpStatusErrors`: n8n re-runs `preAuthentication` only when a request throws.
-- Errors: `answerOf()` reads status (`httpCode`), body and headers from the thrown `NodeApiError` (`cause.response`); `describeClusterError()` turns them into the user-facing messages.
+- `getOperationFields` and `execute` ask again on 401 or 404 (a new key or a new deploy) every `RETRY_INTERVAL_MS` (10 s), at most `MAX_RETRIES` (6) times: 7 requests over 60 s. Then the field list shows the activation notice and a run rethrows. A run that needed retries adds the execution hint "Access to <application> was activated; this run waited <n> s." n8n 2.44.5 keeps a 60 s load-options request open. Never set `ignoreHttpStatusErrors`: n8n re-runs `preAuthentication` only when a request throws. A run's first 404 asks `/status` once whether the blueprint is still one of the project's public blueprints; if not, it fails at once ("is not a public blueprint of …"), otherwise it keeps waiting.
+- Errors: `answerOf()` reads status (`httpCode`), body and headers from the thrown `NodeApiError` (`cause.response`); `describeClusterError()` turns them into the user-facing messages. A blueprint's own errors (`properties.errorOutput[].detail` of a 500) are shown line by line. The credential test maps 401, 403 and 404 to messages with `rules`.
 
 ## Key Implementation Details
 

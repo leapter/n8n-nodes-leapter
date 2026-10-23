@@ -7,13 +7,16 @@ import type {
   IHttpRequestOptions,
   INodeProperties,
 } from 'n8n-workflow';
-import { GRACE_MS, lastRequested, lastUsed, parseKeyMap, pending } from './eval-keys';
-
-/**
- * Leapter's hosted cluster. n8n leaves `clusterUrl` out of the credential data while Advanced
- * Settings is off, so every reader falls back to this (also in nodes/Leapter/cluster.ts).
- */
-const DEFAULT_CLUSTER_URL = 'https://runtime.leapter.com';
+import {
+  DEFAULT_CLUSTER_URL,
+  GRACE_MS,
+  clusterBaseUrl,
+  isSecureAddress,
+  lastRequested,
+  lastUsed,
+  parseKeyMap,
+  pending,
+} from './eval-keys';
 
 function pathOf(url: string): string {
   try {
@@ -71,7 +74,9 @@ export class LeapterApi implements ICredentialType {
       displayName: 'Evaluation Keys',
       name: 'evalKeys',
       type: 'hidden',
-      typeOptions: { expirable: true },
+      // password: n8n redacts the keys before the editor gets the credential, and a save puts
+      // the stored value back in place of the redacted one
+      typeOptions: { expirable: true, password: true },
       default: '',
     },
   ];
@@ -86,7 +91,12 @@ export class LeapterApi implements ICredentialType {
     delete headers.Authorization;
     delete headers['X-API-Key'];
 
-    const path = pathOf((requestOptions.baseURL ?? '') + requestOptions.url);
+    const url = (requestOptions.baseURL ?? '') + requestOptions.url;
+    // Never a key over plain http to another machine, the credential test included
+    if (!isSecureAddress(url)) {
+      throw new Error(`The address ${url} is not https://. Only localhost may be reached without it.`);
+    }
+    const path = pathOf(url);
 
     if (path.includes('/runtime-management/')) {
       headers.Authorization = `Bearer ${credentials.serviceKey as string}`;
@@ -114,7 +124,7 @@ export class LeapterApi implements ICredentialType {
     this: IHttpRequestHelper,
     credentials: ICredentialDataDecryptedObject,
   ): Promise<IDataObject> {
-    const clusterUrl = String(credentials.clusterUrl || DEFAULT_CLUSTER_URL).replace(/\/+$/, '');
+    const clusterUrl = clusterBaseUrl(credentials.clusterUrl);
     const authorization = `Bearer ${credentials.serviceKey as string}`;
     const map = parseKeyMap(credentials.evalKeys);
     const keysUrl = (project: string) => {
@@ -132,11 +142,25 @@ export class LeapterApi implements ICredentialType {
       map[project] = { id: answer.credential.id, key: answer.key, mintedAt: Date.now() };
     };
 
+    // Each project leaves the queue before its key is created, so a refusal (a project gone, an
+    // environment without rights) is not retried for every later request. Only the requested
+    // project's refusal fails this request.
+    let refusal: unknown;
     for (const project of [...pending]) {
-      if (!map[project]) {
-        await mint(project);
-      }
       pending.delete(project);
+      if (map[project]) {
+        continue;
+      }
+      try {
+        await mint(project);
+      } catch (error) {
+        if (project === lastRequested.project) {
+          refusal = error;
+        }
+      }
+    }
+    if (refusal !== undefined) {
+      throw refusal;
     }
 
     // The refusal belongs to the request authenticated last. Replace that project's key only when
@@ -166,12 +190,39 @@ export class LeapterApi implements ICredentialType {
     return { evalKeys: JSON.stringify(map) };
   }
 
-  // A 2xx means the service key is live
+  // A 2xx means the service key is live. The base URL drops a pasted Admin UI path, like
+  // clusterBaseUrl().
   test: ICredentialTestRequest = {
     request: {
       method: 'GET',
-      baseURL: `={{$credentials.clusterUrl || "${DEFAULT_CLUSTER_URL}"}}`,
+      baseURL: `={{($credentials.clusterUrl || "${DEFAULT_CLUSTER_URL}").split("/runtime-management")[0]}}`,
       url: '/runtime-management/environments',
     },
+    rules: [
+      {
+        type: 'responseCode',
+        properties: {
+          value: 401,
+          message:
+            'The cluster does not know this service key. Create one in the Admin UI: Service accounts → n8n → Create key.',
+        },
+      },
+      {
+        type: 'responseCode',
+        properties: {
+          value: 403,
+          message:
+            'The cluster refused this service key: it is wrong, revoked or has no rights. Create one in the Admin UI: Service accounts → n8n → Create key.',
+        },
+      },
+      {
+        type: 'responseCode',
+        properties: {
+          value: 404,
+          message:
+            'Nothing answers as a Leapter Runtime Cluster at this address. Check the Leapter Server under Advanced Settings.',
+        },
+      },
+    ],
   };
 }

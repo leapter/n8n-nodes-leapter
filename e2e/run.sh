@@ -10,7 +10,8 @@ Usage: pnpm e2e            (or: bash e2e/run.sh)
 Runs n8n 2.44.5 in Docker with this repository's build and checks against a Runtime Cluster:
   C1 credential test, C2 first run (one key created), C3 second run (same key),
   C4 run after an n8n restart (same key), C5 run after the key was revoked (new key),
-  C6 overlapping field loads answer with the newest one's result.
+  C6 overlapping field loads answer with the newest one's result,
+  C7 a removed blueprint fails at once instead of waiting.
 
 Inputs (environment variables, all required):
   CLUSTER_URL    The cluster's address, e.g. http://localhost:3002 or https://dev.runtime.leapter.com
@@ -124,10 +125,11 @@ login() {
 		-d "$OWNER_LOGIN" >/dev/null || fail 'setup: owner login failed'
 }
 
-# The evaluation key map a credential stores (default: the workflow's), as JSON ({} when empty)
+# The evaluation key map a credential stores (default: the workflow's), as JSON ({} when empty).
+# Read with the n8n CLI: the REST API redacts the keys like every password field.
 stored_keys() {
-	curl -sf -b "$WORK/cookies" "$N8N/rest/credentials/${1:-$CREDENTIAL_ID}?includeData=true" |
-		jq -c '.data.data.evalKeys // "" | if . == "" then {} else fromjson end'
+	compose exec -T n8n n8n export:credentials --id="${1:-$CREDENTIAL_ID}" --decrypted 2>/dev/null |
+		sed -n '/^\[/,$p' | jq -c '.[0].data.evalKeys // "" | if . == "" then {} else fromjson end'
 }
 
 stored_key_id() {
@@ -146,12 +148,13 @@ load_fields() {
 				credentials: {leapterApi: {id: $credential, name: "Leapter e2e fields"}}}')"
 }
 
-# Runs the workflow with the n8n CLI; prints the Leapter node's output item, fails on an error
+# Runs a workflow (default: the e2e one) with the n8n CLI; prints the Leapter node's output item,
+# fails on an error
 run_workflow() {
 	local output
 	# Its own task broker port: the server already holds the default one
 	if ! output=$(compose exec -T -e N8N_RUNNERS_BROKER_PORT=5681 n8n \
-		n8n execute --id="$WORKFLOW_ID" --rawOutput 2>"$WORK/execute.log"); then
+		n8n execute --id="${1:-$WORKFLOW_ID}" --rawOutput 2>"$WORK/execute.log"); then
 		echo "$output" | tail -20
 		tail -5 "$WORK/execute.log"
 		return 1
@@ -272,6 +275,26 @@ if [[ $(jq -c '.data' <<<"$newer") == '{"fields":[]}' ]] && ((newer_s <= 10)) &&
 	pass "C6 overlapping field loads: newer answered after ${newer_s} s, older after ${older_s} s with the newer result; then $(jq -c '.data.fields | map(.id)' <<<"$fields")"
 else
 	fail "C6 overlapping field loads: newer ($newer_s s) $newer; older ($older_s s) $older; then $fields"
+fi
+
+# --- C7 removed blueprint ------------------------------------------------------------------
+
+# A blueprint id the project does not have answers 404 like a project still activating; the run
+# asks the cluster once and fails at once instead of waiting a minute
+jq '.id = "leapterE2eFlow02" | .name = "Leapter e2e removed blueprint"
+	| .nodes[1].parameters.operation = "00000000-0000-4000-8000-000000000000"' \
+	"$WORK/workflow.json" >"$WORK/workflow-removed.json"
+compose exec -T n8n sh -c 'cat > /tmp/workflow-removed.json && n8n import:workflow --input=/tmp/workflow-removed.json' \
+	<"$WORK/workflow-removed.json" >/dev/null 2>&1 || fail 'C7 removed blueprint: n8n import:workflow failed'
+started=$SECONDS
+if output=$(run_workflow leapterE2eFlow02); then
+	fail "C7 removed blueprint: the run succeeded: $output"
+fi
+elapsed=$((SECONDS - started))
+if grep -q 'is not a public blueprint' <<<"$output" && ((elapsed <= 20)); then
+	pass "C7 removed blueprint (${elapsed} s): $(grep -o 'The blueprint [^.]*\.' <<<"$output" | head -1)"
+else
+	fail "C7 removed blueprint (${elapsed} s): $output"
 fi
 
 echo 'All checks passed.'
