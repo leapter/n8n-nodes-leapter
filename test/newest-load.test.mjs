@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { createRequire } from 'node:module';
 import { setTimeout as wait } from 'node:timers/promises';
 
-// Node strips the types; plain .mjs keeps the n8n lint rules (which forbid node: imports in
-// shipped code) away from this test
-import { newestLoad } from '../nodes/Leapter/newest-load.ts';
+// The compiled build: `pnpm test` runs tsc first. Plain .mjs keeps the n8n lint rules (which
+// forbid node: imports in shipped code) away from the tests.
+const require = createRequire(import.meta.url);
+const { newestLoad } = require('../dist/nodes/Leapter/newest-load.js');
 
 // A load that answers `value` after `ms`, or as soon as it is superseded
 function load(value, ms, seen = {}) {

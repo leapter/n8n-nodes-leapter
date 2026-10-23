@@ -368,12 +368,8 @@ export class Leapter implements INodeType {
           // Pre-warm: one engine request now, so a missing key is created while the user still
           // picks the blueprint. Not awaited; its result is ignored.
           void prewarm(this, environment, application);
-          const applications = await getApplications(this, environment);
-          const callable =
-            applications.find((entry) => entry.slug === application)?.callable ?? [];
-
           // Value: the blueprint id the engine addresses runs by
-          return callable
+          return (await callableBlueprints(this, environment, application))
             .map((blueprint) => ({ name: blueprint.name, value: blueprint.id }))
             .sort((a, b) => a.name.localeCompare(b.name));
         } catch (error) {
@@ -401,14 +397,13 @@ export class Leapter implements INodeType {
 
           // After a project switch n8n keeps the old blueprint and asks with it once; answer at
           // once instead of waiting for a document that cannot have its path
-          let applications: Awaited<ReturnType<typeof getApplications>>;
+          let callable: Awaited<ReturnType<typeof callableBlueprints>>;
           try {
-            applications = await getApplications(this, environment);
+            callable = await callableBlueprints(this, environment, application);
           } catch (error) {
             throw clusterError(this, error, 'Failed to load the blueprint fields');
           }
-          const callable = applications.find((entry) => entry.slug === application)?.callable;
-          if (!callable?.some((blueprint) => blueprint.id === blueprintId)) {
+          if (!callable.some((blueprint) => blueprint.id === blueprintId)) {
             return { fields: [] };
           }
 
@@ -533,6 +528,20 @@ export class Leapter implements INodeType {
             if (!isActivating(error) || retries >= MAX_RETRIES) {
               throw new NodeApiError(this.getNode(), error as JsonObject);
             }
+            // A 404 is also a blueprint that is no longer deployed or public; waiting cannot
+            // help then. Asked once per item; when the cluster cannot say, keep waiting.
+            if (retries === 0 && answerOf(error)?.status === 404) {
+              const callable = await callableBlueprints(this, environment, application).catch(
+                () => undefined,
+              );
+              if (callable && !callable.some((blueprint) => blueprint.id === blueprintId)) {
+                throw new NodeOperationError(
+                  this.getNode(),
+                  `The blueprint ${blueprintId} is not a public blueprint of ${application} (any more). Pick the blueprint again.`,
+                  { itemIndex },
+                );
+              }
+            }
             await sleep(RETRY_INTERVAL_MS);
           }
         }
@@ -581,10 +590,22 @@ export class Leapter implements INodeType {
 }
 
 /**
+ * The project's public blueprints, from the environment's status
+ */
+async function callableBlueprints(
+  ctx: ILoadOptionsFunctions | IExecuteFunctions,
+  environment: string,
+  application: string,
+): Promise<StatusAnswer['environments'][number]['applications'][number]['callable']> {
+  const applications = await getApplications(ctx, environment);
+  return applications.find((entry) => entry.slug === application)?.callable ?? [];
+}
+
+/**
  * The environment's applications from GET {clusterUrl}/runtime-management/environments/{env}/status
  */
 async function getApplications(
-  ctx: ILoadOptionsFunctions,
+  ctx: ILoadOptionsFunctions | IExecuteFunctions,
   environment: string,
 ): Promise<StatusAnswer['environments'][number]['applications']> {
   const clusterUrl = await clusterUrlOf(ctx);

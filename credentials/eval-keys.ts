@@ -19,6 +19,41 @@ export const lastUsed = new Map<string, { keyId: string; at: number }>();
 // Project of the engine request authenticated last, with or without a key
 export const lastRequested: { project?: string } = {};
 
+/**
+ * Leapter's hosted cluster. n8n leaves the credential's `clusterUrl` out while Advanced Settings is
+ * off, so every reader goes through clusterBaseUrl().
+ */
+export const DEFAULT_CLUSTER_URL = 'https://runtime.leapter.com';
+
+/**
+ * The credential's cluster address: the default when unset, without trailing slashes and without
+ * a pasted Admin UI path (`/runtime-management/…`)
+ */
+export function clusterBaseUrl(raw: unknown): string {
+  const url = String(raw || DEFAULT_CLUSTER_URL)
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\/runtime-management(\/.*)?$/, '');
+  return url || DEFAULT_CLUSTER_URL;
+}
+
+/**
+ * Whether a key may be sent to this address: https://, or http:// on this machine only
+ */
+export function isSecureAddress(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  return (
+    parsed.protocol === 'https:' ||
+    (parsed.protocol === 'http:' &&
+      (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1'))
+  );
+}
+
 export function parseKeyMap(raw: unknown): EvalKeyMap {
   if (typeof raw !== 'string' || raw === '') {
     return {};
