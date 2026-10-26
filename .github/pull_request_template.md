@@ -22,3 +22,6 @@ Breaking changes: add `!` after type (e.g., `feat!: change auth method`)
 ## Test plan
 - [ ] `pnpm build` succeeds
 - [ ] `pnpm lint` passes
+- [ ] `pnpm check:public` passes, and this description contains no internal information either
+      (this repository is public: no workstation paths, internal repositories, accounts, project
+      ids, internal links or ticket ids)

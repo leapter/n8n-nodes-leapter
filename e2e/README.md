@@ -27,19 +27,19 @@ environment), `ENVIRONMENT`, `APPLICATION`, `BLUEPRINT_ID`, `INPUT_JSON`.
 
 ## Against the local cluster
 
-Needs Docker, `jq`, a local Runtime Cluster with a project that has a public blueprint deployed to
-`dev`, and `ADMIN_KEY`, a key of an administrator of that cluster.
+Needs Docker, `jq` and a local Runtime Cluster with a project that has a public blueprint deployed
+to `dev`. `prepare-local.sh` takes `ADMIN_KEY` (a key of an administrator of that cluster),
+`APPLICATION` (the project) and `INPUT_JSON` (the blueprint's input); `BLUEPRINT_ID` is optional and
+defaults to the project's first public blueprint.
 
 ```bash
-export ADMIN_KEY=<an admin key of the local cluster>
+export ADMIN_KEY=<admin key> APPLICATION=<project> INPUT_JSON='<input>'
 eval "$(bash e2e/prepare-local.sh)" && pnpm e2e
 ```
 
-`prepare-local.sh` grants the `n8n` service account and the admin key's principal `operator` on
-`dev` (a key creator must hold what the key holds), creates an `n8n` service key, picks the first
-application of `dev` with a public blueprint and prints the six inputs as `export` lines. Its input
-defaults to the fixture blueprint "Hello World" (`{"userInput": string}`); set `INPUT_JSON` first
-for another blueprint. Each call creates a new service key; revoke old ones in the Admin UI (Service
+It grants the `n8n` service account and the admin key's principal `operator` on `dev` (a key
+creator must hold what the key holds), creates an `n8n` service key and prints the six inputs as
+`export` lines. Each call creates a new service key; revoke old ones in the Admin UI (Service
 accounts → n8n).
 
 A local cluster answers on `http://localhost`, and the node refuses `http://` anywhere else. So
@@ -78,7 +78,7 @@ application's keys and creates a second `n8n` service key for Q5 (credentials wi
 key share their key state).
 
 ```bash
-export ADMIN_KEY=<an admin key of the local cluster>
+export ADMIN_KEY=<admin key> APPLICATION=<project> INPUT_JSON='<input>'
 eval "$(bash e2e/prepare-local.sh)" && pnpm e2e:queue
 ```
 
