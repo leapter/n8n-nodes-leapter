@@ -179,6 +179,20 @@ export class LeapterApi implements ICredentialType {
       },
     },
     {
+      displayName: 'Run Address',
+      name: 'runUrl',
+      type: 'string',
+      default: '',
+      placeholder: 'Same as the Leapter Server',
+      description:
+        'Where the cluster answers blueprint runs. Leave empty when that is the Leapter Server; a local cluster answers them on http://localhost:3003.',
+      displayOptions: {
+        show: {
+          showAdvanced: [true],
+        },
+      },
+    },
+    {
       displayName: 'Evaluation Keys',
       name: 'evalKeys',
       type: 'hidden',

@@ -16,6 +16,7 @@ the oldest and the newest n8n the node supports: `N8N_VERSION` picks the `n8nio/
 | C7 removed blueprint | A run of a blueprint id the project does not have fails within 20 s with "is not a public blueprint", instead of waiting a minute |
 | C8 refused key | A run of a project whose key the cluster refuses (an environment that does not exist) fails within 20 s with the refusal, not after a minute with "serves nothing at this address" |
 | C9 no project | A run whose project value is not `environment::application` fails within 20 s with "No project selected" |
+| C10 no Run Address | Only when `RUN_URL` differs from `CLUSTER_URL`: a run through a credential without it reaches the control plane and fails within 20 s naming Run Address, instead of waiting a minute |
 
 The script stops at the first `FAIL`. It always revokes the keys it left and removes n8n with
 `docker compose down -v` (set `E2E_KEEP=1` to keep both for debugging).
@@ -23,7 +24,8 @@ The script stops at the first `FAIL`. It always revokes the keys it left and rem
 ## Inputs
 
 `bash e2e/run.sh --help` lists them: `CLUSTER_URL`, `SERVICE_KEY` (an `operator` service key of the
-environment), `ENVIRONMENT`, `APPLICATION`, `BLUEPRINT_ID`, `INPUT_JSON`.
+environment), `ENVIRONMENT`, `APPLICATION`, `BLUEPRINT_ID`, `INPUT_JSON`, and the optional `RUN_URL`:
+the credential's Run Address, for a cluster that answers runs on another address than `CLUSTER_URL`.
 
 ## Against the local cluster
 
@@ -38,13 +40,13 @@ eval "$(bash e2e/prepare-local.sh)" && pnpm e2e
 ```
 
 It grants the `n8n` service account and the admin key's principal `operator` on `dev` (a key
-creator must hold what the key holds), creates an `n8n` service key and prints the six inputs as
-`export` lines. Each call creates a new service key; revoke old ones in the Admin UI (Service
+creator must hold what the key holds), creates an `n8n` service key and prints the inputs as
+`export` lines (with `RUN_URL=http://localhost:3003`). Each call creates a new service key; revoke old ones in the Admin UI (Service
 accounts → n8n).
 
 A local cluster answers on `http://localhost`, and the node refuses `http://` anywhere else. So
 `relay.js` runs inside the n8n container and forwards the cluster's ports (the control plane's and
-the run address's from `config.json`) from the container's `localhost` to `host.docker.internal`.
+the Run Address's) from the container's `localhost` to `host.docker.internal`.
 A remote `https://` cluster needs no relay.
 
 ## Against a remote cluster

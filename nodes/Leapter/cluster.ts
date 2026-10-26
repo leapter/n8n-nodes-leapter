@@ -73,62 +73,37 @@ export async function provisionKey(
 }
 
 /**
- * The address the cluster answers runs on, from its public config.json.
- * Same rule as the Leapter CLI:
- * 404 or 410 means the cluster serves no Admin UI and answers runs on its own origin.
+ * The address runs go to, checked for https: the credential's Run Address, or its Leapter Server
+ * when that is empty
  */
-export async function readRunBase(ctx: Context, clusterUrl: string): Promise<string> {
-  const notACluster = () =>
-    new NodeOperationError(
-      ctx.getNode(),
-      `The cluster at ${clusterUrl} did not answer as a Runtime Cluster.`,
-    );
+export async function runBaseOf(ctx: Context): Promise<string> {
+  const credentials = await ctx.getCredentials('leapterApi');
+  const runBase =
+    String(credentials.runUrl ?? '')
+      .trim()
+      .replace(/\/+$/, '') || clusterBaseUrl(credentials.clusterUrl);
+  assertHttps(ctx, runBase);
+  return runBase;
+}
 
-  let origin: string;
-  try {
-    origin = new URL(clusterUrl).origin;
-  } catch {
-    throw notACluster();
-  }
-  if (origin === 'null') {
-    throw notACluster();
-  }
+/**
+ * Shown when an engine request reaches the control plane: the cluster answers runs on another
+ * address than its Leapter Server (a local cluster, on http://localhost:3003)
+ */
+export const RUN_ADDRESS_MISSING =
+  'This cluster answers runs on another address than the Leapter Server. Set Run Address under Advanced Settings in the Leapter credential.';
 
-  let document: unknown;
-  try {
-    document = await ctx.helpers.httpRequest({
-      method: 'GET',
-      url: `${origin}/runtime-management/ui/config.json`,
-      json: true,
-      disableFollowRedirect: true,
-    });
-  } catch (error) {
-    const status = (error as { response?: { status?: number } }).response?.status;
-    if (status === 404 || status === 410) {
-      return origin;
-    }
-    if (status !== undefined) {
-      throw notACluster();
-    }
-    throw new NodeApiError(ctx.getNode(), error as JsonObject);
-  }
+/**
+ * Whether an engine request was answered by the control plane, which knows no engine paths. An
+ * engine answers a project it does not serve (yet) with a plain-text 404.
+ */
+export function isControlPlaneAnswer(error: unknown): boolean {
+  const answer = answerOf(error);
+  return answer?.status === 404 && isUnknownEndpoint(parseBody(answer.body));
+}
 
-  if (
-    typeof document !== 'object' ||
-    document === null ||
-    typeof (document as { apiBasePath?: unknown }).apiBasePath !== 'string'
-  ) {
-    throw notACluster();
-  }
-
-  const runBaseUrl = (document as { runBaseUrl?: unknown }).runBaseUrl;
-  if (runBaseUrl === undefined || runBaseUrl === null) {
-    return origin;
-  }
-  if (typeof runBaseUrl !== 'string') {
-    throw notACluster();
-  }
-  return runBaseUrl.trim().replace(/\/+$/, '') || origin;
+function isUnknownEndpoint(problem: ProblemBody | undefined): boolean {
+  return String(problem?.type).endsWith('/runtime-management/unknown-endpoint');
 }
 
 /**
@@ -160,6 +135,7 @@ interface AxiosLikeResponse {
 }
 
 interface ProblemBody {
+  type?: unknown;
   detail?: unknown;
   title?: unknown;
   errors?: Array<{ field?: unknown; message?: unknown }>;
@@ -194,6 +170,9 @@ export function describeClusterError(
     case 401:
       return "The project's access key is not active yet or was revoked. Try again in a minute.";
     case 404:
+      if (isUnknownEndpoint(problem)) {
+        return RUN_ADDRESS_MISSING;
+      }
       if (problem === undefined) {
         return 'The cluster serves nothing at this address yet. A newly deployed project takes about a minute to be reachable.';
       }

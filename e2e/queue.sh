@@ -17,7 +17,7 @@ Runs n8n in queue mode (main, worker, Postgres, Redis) with this repository's bu
 Inputs: as e2e/run.sh (CLUSTER_URL, SERVICE_KEY, ENVIRONMENT, APPLICATION, BLUEPRINT_ID,
 INPUT_JSON), and ADMIN_KEY: a key of an administrator of the cluster, which may list an
 application's keys (the service key may not) and create Q5's second service key.
-Optional: FRESH_APPLICATION and FRESH_BLUEPRINT_ID (a deployed project without any
+Optional: RUN_URL (as e2e/run.sh), FRESH_APPLICATION and FRESH_BLUEPRINT_ID (a deployed project without any
 key yet, blueprint without inputs), N8N_VERSION (default 2.44.5; tested with 2.39.6 and 2.44.5,
 n8n 2.0.3 cannot activate imported workflows from the CLI), E2E_N8N_PORT (default 5693).
 
@@ -42,6 +42,8 @@ done
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(dirname "$HERE")
 CLUSTER_URL=${CLUSTER_URL%/}
+RUN_URL=${RUN_URL:-}
+RUN_URL=${RUN_URL%/}
 export N8N_PORT=${E2E_N8N_PORT:-5693}
 N8N=http://localhost:$N8N_PORT
 CP=$CLUSTER_URL/runtime-management
@@ -64,17 +66,12 @@ fail() {
 	exit 1
 }
 
-RELAY_PORTS=
 local_port() {
 	if [[ $1 =~ ^http://(localhost|127\.0\.0\.1)(:([0-9]+))?(/|$) ]]; then
 		echo "${BASH_REMATCH[3]:-80}"
 	fi
 }
-if [[ -n $(local_port "$CLUSTER_URL") ]]; then
-	run_base=$(curl -sf "$CP/ui/config.json" | jq -r '.runBaseUrl // empty') ||
-		fail "setup: nothing answers at $CLUSTER_URL"
-	RELAY_PORTS="$(local_port "$CLUSTER_URL") $(local_port "${run_base:-$CLUSTER_URL}")"
-fi
+RELAY_PORTS=$(printf '%s\n' "$(local_port "$CLUSTER_URL")" "$(local_port "${RUN_URL:-$CLUSTER_URL}")" | sort -u | xargs)
 export RELAY_PORTS
 
 [[ -n ${ADMIN_KEY:-} ]] || fail 'setup: ADMIN_KEY is not set'
@@ -191,9 +188,10 @@ answer=$(curl -sf -X POST "$CP/service-accounts/service:env:$ENVIRONMENT:n8n/key
 	-H 'Content-Type: application/json' -d '{"reason": "n8n node queue e2e: Q5"}') || fail 'setup: creating a second service key failed'
 SECOND_KEY=$(jq -r '.key' <<<"$answer")
 SECOND_KEY_ID=$(jq -r '.credential.id' <<<"$answer")
-jq -n --arg url "$CLUSTER_URL" --arg key "$SERVICE_KEY" --arg second "$SECOND_KEY" '[$ARGS.positional[] |
+jq -n --arg url "$CLUSTER_URL" --arg run "$RUN_URL" --arg key "$SERVICE_KEY" --arg second "$SECOND_KEY" '[$ARGS.positional[] |
 	{id: ., name: ., type: "leapterApi",
-		data: {serviceKey: (if . == "leapterQueueCred3" then $second else $key end), showAdvanced: true, clusterUrl: $url}}]' \
+		data: {serviceKey: (if . == "leapterQueueCred3" then $second else $key end), showAdvanced: true, clusterUrl: $url,
+			runUrl: $run}}]' \
 	--args "${CREDENTIALS[@]}" >"$WORK/credentials.json"
 {
 	workflow leapterQueueFlow1 leapter-q1 leapterQueueCred1 "$APPLICATION" "$BLUEPRINT_ID" "$INPUT_JSON"

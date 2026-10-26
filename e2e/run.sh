@@ -12,7 +12,8 @@ Runs n8n in Docker with this repository's build and checks against a Runtime Clu
   C4 run after an n8n restart (same key), C5 run after the key was revoked (new key),
   C6 overlapping field loads answer with the newest one's result,
   C7 a removed blueprint fails at once instead of waiting, C8 a project whose key the cluster
-  refuses fails at once with the refusal, C9 a run without a valid project fails at once.
+  refuses fails at once with the refusal, C9 a run without a valid project fails at once,
+  C10 (only with RUN_URL) a credential without it fails at once and names Run Address.
 
 Inputs (environment variables, all required):
   CLUSTER_URL    The cluster's address, e.g. http://localhost:3002 or https://runtime.leapter.com
@@ -22,7 +23,8 @@ Inputs (environment variables, all required):
   BLUEPRINT_ID   The blueprint's id (callable[].id in the environment's status)
   INPUT_JSON     The run's input, e.g. {"userInput": "n8n e2e"}
 
-Optional: N8N_VERSION (the n8nio/n8n image tag, default 2.44.5), E2E_N8N_PORT (default 5691),
+Optional: RUN_URL (the credential's Run Address: where the cluster answers runs, when that is not
+CLUSTER_URL; http://localhost:3003 for the local cluster), N8N_VERSION (the n8nio/n8n image tag, default 2.44.5), E2E_N8N_PORT (default 5691),
 E2E_KEEP=1 keeps n8n running and the key unrevoked.
 
 For the local cluster: export ADMIN_KEY=<admin key> APPLICATION=<project> INPUT_JSON='<input>'
@@ -46,11 +48,15 @@ done
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(dirname "$HERE")
 CLUSTER_URL=${CLUSTER_URL%/}
+RUN_URL=${RUN_URL:-}
+RUN_URL=${RUN_URL%/}
 export N8N_PORT=${E2E_N8N_PORT:-5691}
 N8N=http://localhost:$N8N_PORT
 CREDENTIAL_ID=leapterE2eCred01
 # C6's own credential: it holds no key yet, so its first field load waits for one to activate
 FIELDS_CREDENTIAL_ID=leapterE2eCred02
+# C10's credential: the same cluster without its Run Address
+NO_RUN_URL_CREDENTIAL_ID=leapterE2eCred03
 WORKFLOW_ID=leapterE2eFlow01
 KEY_PATH=$ENVIRONMENT/$APPLICATION
 OWNER_LOGIN='{"emailOrLdapLoginId": "e2e@leapter.test", "password": "e2e-Owner-Pass-1"}'
@@ -71,18 +77,13 @@ fail() {
 }
 
 # A local cluster answers on http://localhost; the relay in the container forwards those ports
-# (the cluster's and its run address's) to host.docker.internal.
-RELAY_PORTS=
+# (the cluster's and its Run Address's) to host.docker.internal.
 local_port() {
 	if [[ $1 =~ ^http://(localhost|127\.0\.0\.1)(:([0-9]+))?(/|$) ]]; then
 		echo "${BASH_REMATCH[3]:-80}"
 	fi
 }
-if [[ -n $(local_port "$CLUSTER_URL") ]]; then
-	run_base=$(curl -sf "$CLUSTER_URL/runtime-management/ui/config.json" | jq -r '.runBaseUrl // empty') ||
-		fail "setup: nothing answers at $CLUSTER_URL"
-	RELAY_PORTS="$(local_port "$CLUSTER_URL") $(local_port "${run_base:-$CLUSTER_URL}")"
-fi
+RELAY_PORTS=$(printf '%s\n' "$(local_port "$CLUSTER_URL")" "$(local_port "${RUN_URL:-$CLUSTER_URL}")" | sort -u | xargs)
 export RELAY_PORTS
 
 revoke() {
@@ -97,7 +98,7 @@ cleanup() {
 	if [[ -n ${E2E_KEEP:-} ]]; then
 		echo "E2E_KEEP: n8n stays at $N8N; key ${KEY_ID:-none} stays active"
 	else
-		for credential in "$CREDENTIAL_ID" "$FIELDS_CREDENTIAL_ID"; do
+		for credential in "$CREDENTIAL_ID" "$FIELDS_CREDENTIAL_ID" ${RUN_URL:+"$NO_RUN_URL_CREDENTIAL_ID"}; do
 			if ! stored_keys "$credential" >/dev/null 2>&1 || [[ -z $(stored_keys "$credential" 2>/dev/null) ]]; then
 				echo "cleanup: could not read the keys of $credential; revoke any it created in the Admin UI"
 				continue
@@ -180,15 +181,18 @@ run_workflow() {
 
 # --- Setup ---------------------------------------------------------------------------------
 
-echo "n8n ${N8N_VERSION:-2.44.5}, cluster $CLUSTER_URL, project $KEY_PATH, blueprint $BLUEPRINT_ID${RELAY_PORTS:+, relayed ports $RELAY_PORTS}"
+echo "n8n ${N8N_VERSION:-2.44.5}, cluster $CLUSTER_URL${RUN_URL:+, runs $RUN_URL}, project $KEY_PATH, blueprint $BLUEPRINT_ID${RELAY_PORTS:+, relayed ports $RELAY_PORTS}"
 pnpm --dir "$ROOT" build >/dev/null || fail 'setup: pnpm build failed'
 compose down -v >/dev/null 2>&1 || true
 compose up -d >/dev/null 2>&1 || fail 'setup: docker compose up failed'
 wait_for_n8n
 
-jq -n --arg id "$CREDENTIAL_ID" --arg fields "$FIELDS_CREDENTIAL_ID" --arg url "$CLUSTER_URL" --arg key "$SERVICE_KEY" \
-	'[{id: $id, name: "Leapter e2e", type: "leapterApi", data: {serviceKey: $key, showAdvanced: true, clusterUrl: $url}},
-		{id: $fields, name: "Leapter e2e fields", type: "leapterApi", data: {serviceKey: $key, showAdvanced: true, clusterUrl: $url}}]' \
+jq -n --arg id "$CREDENTIAL_ID" --arg fields "$FIELDS_CREDENTIAL_ID" --arg bare "$NO_RUN_URL_CREDENTIAL_ID" \
+	--arg url "$CLUSTER_URL" --arg run "$RUN_URL" --arg key "$SERVICE_KEY" \
+	'{serviceKey: $key, showAdvanced: true, clusterUrl: $url} as $data
+	| [{id: $id, name: "Leapter e2e", type: "leapterApi", data: ($data + {runUrl: $run})},
+		{id: $fields, name: "Leapter e2e fields", type: "leapterApi", data: ($data + {runUrl: $run})},
+		{id: $bare, name: "Leapter e2e no run address", type: "leapterApi", data: $data}]' \
 	>"$WORK/credential.json"
 jq --arg env "$ENVIRONMENT" --arg app "$APPLICATION" --arg id "$BLUEPRINT_ID" --arg input "$INPUT_JSON" \
 	'.nodes[1].parameters += {project: {__rl: true, mode: "list", value: "\($env)::\($app)"}, operation: $id, parametersJson: $input}' \
@@ -347,6 +351,29 @@ if grep -q 'No project selected' <<<"$output" && ((elapsed <= 20)); then
 	pass "C9 no project (${elapsed} s): No project selected"
 else
 	fail "C9 no project (${elapsed} s): $output"
+fi
+
+# --- C10 no Run Address --------------------------------------------------------------------
+
+# A cluster that answers runs elsewhere: without its Run Address the run reaches the control plane,
+# which fails at once instead of looking like a key that activates for a minute
+if [[ -n $RUN_URL && $RUN_URL != "$CLUSTER_URL" ]]; then
+	jq --arg credential "$NO_RUN_URL_CREDENTIAL_ID" '.id = "leapterE2eFlow05" | .name = "Leapter e2e no run address"
+		| .versionId = "9f6b1c2e-0001-4000-8000-0000000000f5"
+		| .nodes[1].credentials.leapterApi = {id: $credential, name: "Leapter e2e no run address"}' \
+		"$WORK/workflow.json" >"$WORK/workflow-no-run-url.json"
+	compose exec -T n8n sh -c 'cat > /tmp/workflow-no-run-url.json && n8n import:workflow --input=/tmp/workflow-no-run-url.json' \
+		<"$WORK/workflow-no-run-url.json" >/dev/null 2>&1 || fail 'C10 no Run Address: n8n import:workflow failed'
+	started=$SECONDS
+	if output=$(run_workflow leapterE2eFlow05); then
+		fail "C10 no Run Address: the run succeeded: $output"
+	fi
+	elapsed=$((SECONDS - started))
+	if grep -q 'Set Run Address' <<<"$output" && ((elapsed <= 20)); then
+		pass "C10 no Run Address (${elapsed} s): names Run Address"
+	else
+		fail "C10 no Run Address (${elapsed} s): $output"
+	fi
 fi
 
 echo 'All checks passed.'
