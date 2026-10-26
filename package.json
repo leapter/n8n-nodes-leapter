@@ -1,7 +1,7 @@
 {
 	"name": "n8n-nodes-leapter",
 	"version": "0.0.0-development",
-	"description": "n8n community node for Leapter - execute AI blueprints and workflows dynamically via OpenAPI",
+	"description": "n8n community node for Leapter: run the public blueprints deployed to a Leapter Runtime Cluster",
 	"license": "MIT",
 	"author": {
 		"name": "Leapter",
@@ -20,7 +20,7 @@
 		"url": "https://github.com/leapter/n8n-nodes-leapter/issues"
 	},
 	"engines": {
-		"node": ">=18.0.0"
+		"node": ">=20.19"
 	},
 	"packageManager": "pnpm@10.26.0",
 	"scripts": {
@@ -29,6 +29,10 @@
 		"dev": "n8n-node dev",
 		"lint": "n8n-node lint",
 		"lint:fix": "n8n-node lint --fix",
+		"test": "tsc && node --test test/",
+		"e2e": "bash e2e/run.sh",
+		"e2e:queue": "bash e2e/queue.sh",
+		"check:public": "bash scripts/check-public.sh",
 		"prepublishOnly": "n8n-node prerelease"
 	},
 	"files": [

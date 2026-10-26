@@ -1,0 +1,74 @@
+# n8n in queue mode (main + worker, Postgres, Redis) with this repository's dist/; started by e2e/queue.sh
+name: n8n-leapter-queue
+
+x-n8n: &n8n
+  image: n8nio/n8n:${N8N_VERSION:-2.44.5}
+  environment: &n8n-env
+    N8N_ENCRYPTION_KEY: n8n-leapter-e2e-encryption-key
+    N8N_CUSTOM_EXTENSIONS: /leapter/dist
+    N8N_SECURE_COOKIE: 'false'
+    N8N_DIAGNOSTICS_ENABLED: 'false'
+    N8N_PERSONALIZATION_ENABLED: 'false'
+    EXECUTIONS_MODE: queue
+    QUEUE_BULL_REDIS_HOST: redis
+    DB_TYPE: postgresdb
+    DB_POSTGRESDB_HOST: postgres
+    DB_POSTGRESDB_DATABASE: n8n
+    DB_POSTGRESDB_USER: n8n
+    DB_POSTGRESDB_PASSWORD: n8n
+    # Owner from the environment; password e2e-Owner-Pass-1 (a local throwaway instance)
+    N8N_INSTANCE_OWNER_MANAGED_BY_ENV: 'true'
+    N8N_INSTANCE_OWNER_EMAIL: e2e@leapter.test
+    N8N_INSTANCE_OWNER_PASSWORD_HASH: $$2a$$10$$zc1ZqNqNHF8DCGbw1vPV2uTWcaSGgtq44IzxALbh.o4l.b3Nb5o7C
+    N8N_INSTANCE_OWNER_FIRST_NAME: E2E
+    N8N_INSTANCE_OWNER_LAST_NAME: Owner
+    RELAY_PORTS: ${RELAY_PORTS:-}
+  extra_hosts:
+    - 'host.docker.internal:host-gateway'
+  volumes:
+    - ../dist:/leapter/dist:ro
+    - ./relay.js:/e2e/relay.js:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_started
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: n8n
+      POSTGRES_PASSWORD: n8n
+      POSTGRES_DB: n8n
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U n8n']
+      interval: 2s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+
+  # The editor, the REST API and the webhooks; executions go to the worker
+  n8n:
+    <<: *n8n
+    entrypoint: ['tini', '--', 'sh', '-c', 'node /e2e/relay.js & exec /docker-entrypoint.sh']
+    ports:
+      - '127.0.0.1:${N8N_PORT:-5693}:5678'
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://localhost:5678/healthz/readiness').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      retries: 60
+
+  # Starts once the main process has migrated the database: n8n 2.0 runs the migrations in every
+  # process, and two at once on a fresh database collide
+  worker:
+    <<: *n8n
+    entrypoint: ['tini', '--', 'sh', '-c', 'node /e2e/relay.js & exec /docker-entrypoint.sh worker']
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      n8n:
+        condition: service_healthy
