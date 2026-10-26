@@ -90,7 +90,7 @@ The Leapter node provides dynamic operations based on the Blueprints deployed to
 
 ### How It Works
 
-1. Select a **Project**: the dropdown lists every deployed project with public Blueprints that your service key reaches. When the key reaches more than one environment, each project is shown as `environment · project`.
+1. Select a **Project**: opening the field lists every deployed project with public Blueprints that your service key reaches. When the key reaches more than one environment, each project is shown as `environment · project`.
 2. Select a **Blueprint**: the dropdown lists the project's public Blueprints
 3. Configure input parameters using either:
    - **Visual Mode**: Map fields visually with type hints

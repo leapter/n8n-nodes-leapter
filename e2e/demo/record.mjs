@@ -347,8 +347,14 @@ async function record(browser, labState, serviceKey) {
 		await ndv.waitFor();
 		await sleep(1_000);
 		const pick = async (parameter, name) => {
-			await page.locator(N(`parameter-input-${parameter}`)).click();
-			const option = page.locator('.el-select-dropdown__item:visible').filter({ hasText: name }).first();
+			// Project is a resource locator (its list opens on a click), Blueprint a dropdown
+			const locator = page.locator(N(`resource-locator-${parameter}`));
+			const rl = (await locator.count()) > 0;
+			await (rl ? locator.locator(N('rlc-input')) : page.locator(N(`parameter-input-${parameter}`))).click();
+			const option = page
+				.locator(rl ? `${N('rlc-item')}:visible` : '.el-select-dropdown__item:visible')
+				.filter({ hasText: name })
+				.first();
 			await option.waitFor({ timeout: 30_000 });
 			await sleep(700);
 			await option.click();
