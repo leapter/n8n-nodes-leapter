@@ -41,6 +41,7 @@ function provisionContext(status) {
   const calls = [];
   return {
     calls,
+    getNode: () => ({ name: 'Leapter', type: 'CUSTOM.leapter', typeVersion: 1, position: [0, 0], parameters: {} }),
     async getCredentials() {
       return {
         serviceKey: `lk_mgmt_provision_${status}`,
@@ -71,8 +72,12 @@ test('401 and 404 while requesting a key are left to the request that follows', 
 });
 
 test('a refused key creation fails at once instead of waiting a minute', async () => {
-  await assert.rejects(provisionKey(provisionContext(403), 'http://localhost:3003', 'dev', 'new'), /status 403/);
-  await assert.rejects(provisionKey(provisionContext(500), 'http://localhost:3003', 'dev', 'new'), /status 500/);
+  for (const status of [403, 500]) {
+    await assert.rejects(provisionKey(provisionContext(status), 'http://localhost:3003', 'dev', 'new'), (error) => {
+      assert.equal(String(error.httpCode), String(status));
+      return true;
+    });
+  }
 });
 
 test('a project with a key needs no request', async () => {

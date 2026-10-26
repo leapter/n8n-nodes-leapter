@@ -67,7 +67,7 @@ export async function provisionKey(
     // for an environment without rights) or an unreachable cluster: waiting cannot help.
     const status = answerOf(error)?.status;
     if (status !== 401 && status !== 404) {
-      throw error;
+      throw new NodeApiError(ctx.getNode(), error as JsonObject);
     }
   }
 }
