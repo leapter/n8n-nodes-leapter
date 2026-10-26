@@ -1,4 +1,4 @@
-// Records the captioned demo video of the Leapter n8n node (ENG-4505). See e2e/demo/README.md.
+// Records the captioned demo video of the Leapter n8n node. See e2e/demo/README.md.
 //
 //   node e2e/demo/record.mjs            setup, record, trim, check frames, clean up
 //   node e2e/demo/record.mjs --verify   only check the frames of an existing video
@@ -14,12 +14,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '../..');
 const env = (name, fallback) => process.env[name] || fallback;
 
-const GENIELABS_DIR = env('GENIELABS_DIR', join(homedir(), 'leapter/genielabs'));
 const LAB_URL = env('LAB_URL', 'http://localhost:3000');
-const LAB_ACCOUNT = env('LAB_ACCOUNT', 'dev-team');
-// The Dev Team's "Insurance Claim Triage" with a public blueprint (there are several of that name)
-const LAB_PROJECT_ID = env('LAB_PROJECT_ID', 'bc630db4-30b4-4142-ae7a-fe3282375c5c');
-const LAB_EMAIL = env('LAB_EMAIL', 'alice@leapter.com');
+// The Lab workspace and project to release and deploy, and who signs in: no defaults
+const LAB_ACCOUNT = env('LAB_ACCOUNT');
+const LAB_PROJECT_ID = env('LAB_PROJECT_ID');
+const LAB_EMAIL = env('LAB_EMAIL');
 const CLUSTER_NAME = env('CLUSTER_NAME', 'local');
 const CLUSTER_URL = env('CLUSTER_URL', 'http://localhost:3002');
 const ENVIRONMENT = env('ENVIRONMENT', 'dev');
@@ -63,15 +62,15 @@ function usage() {
 Records e2e/demo/recordings/n8n-node-demo.webm: the Leapter node in n8n 2.44.5 triaging an insurance
 claim against the local Runtime Cluster, with seven English captions, 1280x720, 60-120 s.
 
-Needs the local Lab, the local cluster (pnpm dev:cluster in genielabs), Docker and jq.
+Needs the local Lab, the local Runtime Cluster, Docker and jq.
 
-Inputs (environment variables, all optional):
-  GENIELABS_DIR    genielabs checkout (default ~/leapter/genielabs): Lab password, bootstrap key
+Inputs (environment variables):
+  ADMIN_KEY        required: a key of an administrator of the local cluster
+  LAB_ACCOUNT      required: the Lab workspace (slug) of the project
+  LAB_PROJECT_ID   required: the Lab project to release and deploy, with a public blueprint
+  LAB_EMAIL        required: who signs in to the Lab and the Admin UI
+  LAB_PASSWORD     required: their password
   LAB_URL          default http://localhost:3000
-  LAB_ACCOUNT      default dev-team
-  LAB_PROJECT_ID   default bc630db4-30b4-4142-ae7a-fe3282375c5c (Dev Team "Insurance Claim Triage")
-  LAB_EMAIL        default alice@leapter.com
-  LAB_PASSWORD     default: LAB_EMAIL's password in apps/lab/scripts/dev-team.config.json
   CLUSTER_NAME     the cluster's name in the Lab's deploy dialog, default local
   CLUSTER_URL      default http://localhost:3002
   ENVIRONMENT      default dev
@@ -90,22 +89,14 @@ const T = (id) => `[data-test="${id}"], [data-testid="${id}"]`;
 const N = (id) => `[data-test-id="${id}"]`;
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
-function labPassword() {
-	if (process.env.LAB_PASSWORD) return process.env.LAB_PASSWORD;
-	const config = JSON.parse(
-		readFileSync(join(GENIELABS_DIR, 'apps/lab/scripts/dev-team.config.json'), 'utf8'),
-	);
-	const user = config.users.find((entry) => entry.email === LAB_EMAIL);
-	if (!user) throw new Error(`${LAB_EMAIL} is not in dev-team.config.json; set LAB_PASSWORD.`);
-	return user.password;
+// A required input; fails with what is missing
+function required(name) {
+	const value = process.env[name];
+	if (!value) throw new Error(`${name} is not set; see node e2e/demo/record.mjs --help.`);
+	return value;
 }
 
-function bootstrapAdminKey() {
-	const file = readFileSync(join(GENIELABS_DIR, 'apps/runtime-management/.env'), 'utf8');
-	const line = file.split('\n').find((entry) => entry.startsWith('RUNTIME_MANAGEMENT_BOOTSTRAP_ADMIN_KEY='));
-	if (!line) throw new Error('RUNTIME_MANAGEMENT_BOOTSTRAP_ADMIN_KEY is not set in runtime-management/.env.');
-	return line.split('=').slice(1).join('=').replace(/["']/g, '');
-}
+const labPassword = () => required('LAB_PASSWORD');
 
 async function controlPlane(path, key, init = {}) {
 	const answer = await fetch(`${CLUSTER_URL}/runtime-management${path}`, {
@@ -188,7 +179,7 @@ async function waitUntilCallable(adminKey) {
 
 function prepareServiceKey() {
 	const exports = execFileSync('bash', [join(ROOT, 'e2e/prepare-local.sh')], {
-		env: { ...process.env, GENIELABS_DIR, APPLICATION },
+		env: { ...process.env, APPLICATION },
 		encoding: 'utf8',
 		stdio: ['ignore', 'pipe', 'inherit'],
 	});
@@ -584,7 +575,8 @@ async function main() {
 			await verify(browser);
 			return;
 		}
-		const adminKey = bootstrapAdminKey();
+		const adminKey = required('ADMIN_KEY');
+		for (const name of ['LAB_ACCOUNT', 'LAB_PROJECT_ID', 'LAB_EMAIL', 'LAB_PASSWORD']) required(name);
 		if (args.includes('--deploy-only')) {
 			await releaseAndDeploy(browser);
 			const callable = await waitUntilCallable(adminKey);

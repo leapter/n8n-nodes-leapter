@@ -15,13 +15,14 @@ Runs n8n in queue mode (main, worker, Postgres, Redis) with this repository's bu
   Q6 a project that never had a key (only with FRESH_APPLICATION and FRESH_BLUEPRINT_ID).
 
 Inputs: as e2e/run.sh (CLUSTER_URL, SERVICE_KEY, ENVIRONMENT, APPLICATION, BLUEPRINT_ID,
-INPUT_JSON), and ADMIN_KEY: a key that may list an application's keys (the service key may not);
-for a local cluster it is read from genielabs (GENIELABS_DIR, default ~/leapter/genielabs).
+INPUT_JSON), and ADMIN_KEY: a key of an administrator of the cluster, which may list an
+application's keys (the service key may not) and create Q5's second service key.
 Optional: FRESH_APPLICATION and FRESH_BLUEPRINT_ID (a deployed project without any
 key yet, blueprint without inputs), N8N_VERSION (default 2.44.5; tested with 2.39.6 and 2.44.5,
 n8n 2.0.3 cannot activate imported workflows from the CLI), E2E_N8N_PORT (default 5693).
 
-For the local cluster: eval "$(bash e2e/prepare-local.sh)" && bash e2e/queue.sh
+For the local cluster: export ADMIN_KEY=<an admin key of the local cluster>
+  eval "$(bash e2e/prepare-local.sh)" && bash e2e/queue.sh
 EOF
 }
 
@@ -76,10 +77,6 @@ if [[ -n $(local_port "$CLUSTER_URL") ]]; then
 fi
 export RELAY_PORTS
 
-if [[ -z ${ADMIN_KEY:-} && -n $(local_port "$CLUSTER_URL") ]]; then
-	ADMIN_KEY=$(sed -n 's/^RUNTIME_MANAGEMENT_BOOTSTRAP_ADMIN_KEY=//p' \
-		"${GENIELABS_DIR:-$HOME/leapter/genielabs}/apps/runtime-management/.env" 2>/dev/null | tr -d "\"'")
-fi
 [[ -n ${ADMIN_KEY:-} ]] || fail 'setup: ADMIN_KEY is not set'
 curl -sf "$CP/environments/$ENVIRONMENT/applications/$APPLICATION/keys" -H "Authorization: Bearer $ADMIN_KEY" >/dev/null ||
 	fail "setup: ADMIN_KEY may not list the keys of $APPLICATION"

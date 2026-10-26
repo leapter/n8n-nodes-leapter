@@ -4,23 +4,24 @@
 take, 1280×720 and 60–120 s, of the Leapter node in n8n 2.44.5 triaging an insurance claim
 against the local Runtime Cluster. Record it again for a release whenever the node's screens change.
 
-`node e2e/demo/record.mjs --help` lists its inputs; all have defaults for the local stack.
+`node e2e/demo/record.mjs --help` lists its inputs. Required: `ADMIN_KEY` (a key of an administrator
+of the local cluster), `LAB_ACCOUNT` and `LAB_PROJECT_ID` (the Lab workspace and the project to
+deploy, with a public blueprint taking the claim below), `LAB_EMAIL` and `LAB_PASSWORD` (who signs
+in to the Lab and the Admin UI).
 
 ## Needs
 
-The local Lab on `http://localhost:3000`, the local cluster (`pnpm dev:cluster` in genielabs),
-Docker, `jq`, and Playwright's Chromium and ffmpeg (`npx playwright install chromium ffmpeg`).
+The local Lab on `http://localhost:3000`, the local Runtime Cluster, Docker, `jq`, and Playwright's
+Chromium and ffmpeg (`npx playwright install chromium ffmpeg`).
 
 ## What the script does
 
 **Setup** (not recorded):
 
-1. Signs in to the Lab as `alice@leapter.com` (password from genielabs
-   `apps/lab/scripts/dev-team.config.json`), opens the Dev Team project **"Insurance Claim
-   Triage"** (`bc630db4-30b4-4142-ae7a-fe3282375c5c`; the workspace has several projects of that
-   name, and this is the one deployed as `insurance-claim-triage`), creates a release (or continues
-   with the release of the current version) and deploys it to `dev` on the cluster "local". Stops
-   when the release has no public blueprint.
+1. Signs in to the Lab as `LAB_EMAIL`, opens `LAB_PROJECT_ID` (an "Insurance Claim Triage"
+   project, deployed as `insurance-claim-triage`), creates a release (or continues with the release
+   of the current version) and deploys it to `dev` on the cluster "local". Stops when the release
+   has no public blueprint.
 2. Waits until the cluster lists the blueprint as callable, gets an `n8n` service key with
    `e2e/prepare-local.sh` and starts a fresh n8n with `e2e/docker-compose.yml` and this branch's
    build.
@@ -35,7 +36,7 @@ Docker, `jq`, and Playwright's Chromium and ffmpeg (`npx playwright install chro
 | 4 | Enter a claim | The claim below is entered |
 | 5 | Run it | Execute workflow |
 | 6 | The decision comes back with its trace id | The output (JSON): `outputData.decision` and `_metadata.runId` |
-| 7 | Every run is recorded in the Runtime Cluster | Admin UI (signed in as Alice) → Runs, searched by the n8n execution ID, opened: the run with the same id |
+| 7 | Every run is recorded in the Runtime Cluster | Admin UI (signed in as `LAB_EMAIL`) → Runs, searched by the n8n execution ID, opened: the run with the same id |
 
 The claim is the first case of the project's test suite "Triage Verification Suite", "Basic
 policy within limit" (expects `approve`):
@@ -63,12 +64,9 @@ n8n (`--keep` skips this).
 
 ## Other fixtures
 
-`--deploy-only` releases and deploys another Lab project the same way, for example the Dev Team
-project **"n8n no-inputs fixture"** (`9fe2d667-e975-40c6-bcc9-8310dcde9566`, blueprint "Health
-Check": no inputs, answers `{"status": "ok"}`), which shows the node's "This blueprint takes no
-inputs" notice:
+`--deploy-only` releases and deploys another Lab project the same way, for example a project with
+a blueprint without inputs, which shows the node's "This blueprint takes no inputs" notice:
 
 ```bash
-LAB_PROJECT_ID=9fe2d667-e975-40c6-bcc9-8310dcde9566 APPLICATION=n8n-no-inputs-fixture \
-  node e2e/demo/record.mjs --deploy-only
+LAB_PROJECT_ID=<project id> APPLICATION=<its application slug> node e2e/demo/record.mjs --deploy-only
 ```

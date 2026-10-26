@@ -27,32 +27,32 @@ environment), `ENVIRONMENT`, `APPLICATION`, `BLUEPRINT_ID`, `INPUT_JSON`.
 
 ## Against the local cluster
 
-Needs Docker, `jq`, the local cluster running (`pnpm dev:cluster` in genielabs) and a project with
-a public blueprint deployed to `dev` from the Lab.
+Needs Docker, `jq`, a local Runtime Cluster with a project that has a public blueprint deployed to
+`dev`, and `ADMIN_KEY`, a key of an administrator of that cluster.
 
 ```bash
+export ADMIN_KEY=<an admin key of the local cluster>
 eval "$(bash e2e/prepare-local.sh)" && pnpm e2e
 ```
 
-`prepare-local.sh` reads the bootstrap admin key from
-`$GENIELABS_DIR/apps/runtime-management/.env` (default `~/leapter/genielabs`), grants the `n8n`
-service account and the bootstrap principal `operator` on `dev` (a key creator must hold what the
-key holds), creates an `n8n` service key, picks the first application of `dev` with a public
-blueprint and prints the six inputs as `export` lines. Its input defaults to the fixture blueprint
-"Hello World" (`{"userInput": string}`); set `INPUT_JSON` first for another blueprint. Each call
-creates a new service key; revoke old ones in the Admin UI (Service accounts → n8n).
+`prepare-local.sh` grants the `n8n` service account and the admin key's principal `operator` on
+`dev` (a key creator must hold what the key holds), creates an `n8n` service key, picks the first
+application of `dev` with a public blueprint and prints the six inputs as `export` lines. Its input
+defaults to the fixture blueprint "Hello World" (`{"userInput": string}`); set `INPUT_JSON` first
+for another blueprint. Each call creates a new service key; revoke old ones in the Admin UI (Service
+accounts → n8n).
 
 A local cluster answers on `http://localhost`, and the node refuses `http://` anywhere else. So
 `relay.js` runs inside the n8n container and forwards the cluster's ports (the control plane's and
 the run address's from `config.json`) from the container's `localhost` to `host.docker.internal`.
 A remote `https://` cluster needs no relay.
 
-## Against the dev stage
+## Against a remote cluster
 
-With a key of `service:env:playground:n8n`:
+With a key of the environment's `n8n` service account:
 
 ```bash
-CLUSTER_URL=https://dev.runtime.leapter.com SERVICE_KEY=$DEV_SERVICE_KEY ENVIRONMENT=playground \
+CLUSTER_URL=https://<cluster> SERVICE_KEY=<lk_mgmt_…> ENVIRONMENT=<environment> \
 APPLICATION=<app> BLUEPRINT_ID=<id> INPUT_JSON='<input>' pnpm e2e
 ```
 
@@ -73,11 +73,12 @@ credential:
 | Q5 same moment | First use on main and worker at once both succeed; it reports how many keys were created (a race can create two, the credential stores one, the other stays active until revoked) |
 | Q6 never-keyed project | Only with `FRESH_APPLICATION` and `FRESH_BLUEPRINT_ID`: a project that never had a key, first used on the worker |
 
-Same inputs as `pnpm e2e`, plus `ADMIN_KEY`, a key that may list an application's keys and create a
-second `n8n` service key for Q5 (credentials with the same service key share their key state). For
-the local cluster it is read from genielabs:
+Same inputs as `pnpm e2e`, plus `ADMIN_KEY`, a key of an administrator of the cluster: it lists an
+application's keys and creates a second `n8n` service key for Q5 (credentials with the same service
+key share their key state).
 
 ```bash
+export ADMIN_KEY=<an admin key of the local cluster>
 eval "$(bash e2e/prepare-local.sh)" && pnpm e2e:queue
 ```
 

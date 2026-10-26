@@ -2,16 +2,15 @@
 # Prepares the local Runtime Cluster for e2e/run.sh and prints its six inputs as export lines:
 #   eval "$(bash e2e/prepare-local.sh)" && pnpm e2e
 #
-# Grants service account n8n and the bootstrap principal `operator` on dev (a key creator must hold
-# what the key holds, D-SA-4 condition 2), creates an n8n service key and picks APPLICATION, else
+# Needs ADMIN_KEY, a key of an administrator of the local cluster. Grants service account n8n and the
+# admin key's principal `operator` on dev (a key creator must hold what the key holds), creates an
+# n8n service key and picks APPLICATION, else
 # the first application of dev with a public blueprint. Without INPUT_JSON it picks the fixture
 # application whose blueprint the default input fits. Messages go to stderr, so only the exports
 # are evaluated.
 set -euo pipefail
 
-GENIELABS_DIR=${GENIELABS_DIR:-$HOME/leapter/genielabs}
 CP=http://localhost:3002/runtime-management
-ENV_FILE=$GENIELABS_DIR/apps/runtime-management/.env
 
 fail() {
 	echo "prepare-local: $*" >&2
@@ -19,25 +18,22 @@ fail() {
 }
 
 command -v jq >/dev/null || fail "jq is required."
-[ -f "$ENV_FILE" ] || fail "$ENV_FILE not found. Set GENIELABS_DIR to your genielabs checkout."
-
-ADMIN_KEY=$(sed -n 's/^RUNTIME_MANAGEMENT_BOOTSTRAP_ADMIN_KEY=//p' "$ENV_FILE" | tr -d "\"'")
-[ -n "$ADMIN_KEY" ] || fail "RUNTIME_MANAGEMENT_BOOTSTRAP_ADMIN_KEY is not set in $ENV_FILE."
+[ -n "${ADMIN_KEY:-}" ] || fail "ADMIN_KEY is not set: a key of an administrator of the local cluster."
 
 # admin METHOD PATH [BODY] -> prints the answer body; fails on a non-2xx answer
 admin() {
 	local answer status
 	answer=$(curl -sS -w '\n%{http_code}' -X "$1" "$CP$2" \
 		-H "Authorization: Bearer $ADMIN_KEY" -H 'Content-Type: application/json' \
-		${3:+-d "$3"}) || fail "The local cluster is not running: nothing answers at $CP. Start it with 'pnpm dev:cluster' in genielabs."
+		${3:+-d "$3"}) || fail "The local cluster is not running: nothing answers at $CP."
 	status=${answer##*$'\n'}
 	answer=${answer%$'\n'*}
 	[[ $status == 2* ]] || fail "$1 $2 answered $status: $answer"
 	printf '%s' "$answer"
 }
 
-BOOTSTRAP=$(admin GET /environments | jq -r '.caller.principal')
-echo "prepare-local: bootstrap principal $BOOTSTRAP" >&2
+ADMIN_PRINCIPAL=$(admin GET /environments | jq -r '.caller.principal')
+echo "prepare-local: admin principal $ADMIN_PRINCIPAL" >&2
 
 grant() {
 	admin POST /grants "$(jq -nc --argjson principal "$1" \
@@ -45,8 +41,8 @@ grant() {
 		  reason: "n8n node e2e (prepare-local.sh)"}')" >/dev/null
 }
 grant '{"kind": "service", "name": "n8n"}'
-grant "$(jq -nc --arg p "$BOOTSTRAP" '$p')"
-echo "prepare-local: granted operator on dev to service n8n and $BOOTSTRAP" >&2
+grant "$(jq -nc --arg p "$ADMIN_PRINCIPAL" '$p')"
+echo "prepare-local: granted operator on dev to service n8n and $ADMIN_PRINCIPAL" >&2
 
 KEY_ANSWER=$(admin POST /service-accounts/service:env:dev:n8n/keys '{"reason": "n8n node e2e"}')
 SERVICE_KEY=$(jq -r '.key' <<<"$KEY_ANSWER")
