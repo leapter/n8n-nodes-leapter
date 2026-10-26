@@ -455,26 +455,25 @@ export class Leapter implements INodeType {
     // Get n8n execution ID for correlation (used for server-side logging)
     const executionId = this.getExecutionId();
 
-    // Get selected project (same for all items)
-    const projectValue = this.getNodeParameter('project', 0, '', { extractValue: true }) as string;
-
-    if (!projectValue) {
-      throw new NodeOperationError(
-        this.getNode(),
-        'No project selected. Please select a project first.',
-      );
-    }
-
     // The address the cluster answers runs on, once per execution
     const runBase = await readRunBase(this, await clusterUrlOf(this));
     assertHttps(this, runBase);
 
     for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
       try {
-        // Saved values: project = environment::application, operation = blueprint id
-        const [environment, application] = (
-          this.getNodeParameter('project', itemIndex, '', { extractValue: true }) as string
-        ).split('::');
+        // Saved values: project = environment::application, operation = blueprint id. Checked
+        // per item: an expression may give each item its own project.
+        const project = splitProject(
+          this.getNodeParameter('project', itemIndex, '', { extractValue: true }),
+        );
+        if (!project) {
+          throw new NodeOperationError(
+            this.getNode(),
+            'No project selected. Pick one from the list.',
+            { itemIndex },
+          );
+        }
+        const [environment, application] = project;
         const blueprintId = this.getNodeParameter('operation', itemIndex) as string;
         const inputMode = this.getNodeParameter('inputMode', itemIndex) as string;
         const options = this.getNodeParameter('options', itemIndex, {}) as {
@@ -673,7 +672,15 @@ async function prewarm(
  * The selected project (`environment::application`) in a load-options call, '' when none
  */
 function projectOf(ctx: ILoadOptionsFunctions): string {
-  return (ctx.getNodeParameter('project', '', { extractValue: true }) as string) ?? '';
+  return splitProject(ctx.getNodeParameter('project', '', { extractValue: true }))?.join('::') ?? '';
+}
+
+/**
+ * `environment::application` split in two, or undefined when either part is missing
+ */
+function splitProject(value: unknown): [string, string] | undefined {
+  const [environment, application, rest] = String(value ?? '').split('::');
+  return environment && application && rest === undefined ? [environment, application] : undefined;
 }
 
 /**

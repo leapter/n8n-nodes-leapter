@@ -11,7 +11,8 @@ Runs n8n in Docker with this repository's build and checks against a Runtime Clu
   C1 credential test, C2 first run (one key created), C3 second run (same key),
   C4 run after an n8n restart (same key), C5 run after the key was revoked (new key),
   C6 overlapping field loads answer with the newest one's result,
-  C7 a removed blueprint fails at once instead of waiting.
+  C7 a removed blueprint fails at once instead of waiting, C8 a project whose key the cluster
+  refuses fails at once with the refusal, C9 a run without a valid project fails at once.
 
 Inputs (environment variables, all required):
   CLUSTER_URL    The cluster's address, e.g. http://localhost:3002 or https://dev.runtime.leapter.com
@@ -96,6 +97,10 @@ cleanup() {
 		echo "E2E_KEEP: n8n stays at $N8N; key ${KEY_ID:-none} stays active"
 	else
 		for credential in "$CREDENTIAL_ID" "$FIELDS_CREDENTIAL_ID"; do
+			if ! stored_keys "$credential" >/dev/null 2>&1 || [[ -z $(stored_keys "$credential" 2>/dev/null) ]]; then
+				echo "cleanup: could not read the keys of $credential; revoke any it created in the Admin UI"
+				continue
+			fi
 			KEY_ID=$(stored_key_id "$credential" 2>/dev/null || true)
 			if [[ -n $KEY_ID ]]; then
 				if revoke "$KEY_ID" 'n8n node e2e: cleanup'; then
@@ -303,6 +308,43 @@ if grep -q 'is not a public blueprint' <<<"$output" && ((elapsed <= 20)); then
 	pass "C7 removed blueprint (${elapsed} s): $(grep -o 'The blueprint [^.]*\.' <<<"$output" | head -1)"
 else
 	fail "C7 removed blueprint (${elapsed} s): $output"
+fi
+
+# --- C8 refused key ------------------------------------------------------------------------
+
+# A project whose key the cluster will not create (here: an environment that does not exist, which
+# the control plane refuses like one without rights) fails at once with the refusal
+run_other() {
+	jq --arg id "$1" --arg name "$2" --arg version "$3" --arg project "$4" \
+		'.id = $id | .name = $name | .versionId = $version | .nodes[1].parameters.project.value = $project' \
+		"$WORK/workflow.json" >"$WORK/$1.json"
+	compose exec -T n8n sh -c "cat > /tmp/$1.json && n8n import:workflow --input=/tmp/$1.json" \
+		<"$WORK/$1.json" >/dev/null 2>&1 || return 2
+	run_workflow "$1"
+}
+started=$SECONDS
+if output=$(run_other leapterE2eFlow03 'Leapter e2e refused key' 9f6b1c2e-0001-4000-8000-0000000000f3 \
+	"n8n-e2e-no-such-environment::$APPLICATION"); then
+	fail "C8 refused key: the run succeeded: $output"
+fi
+elapsed=$((SECONDS - started))
+if ((elapsed <= 20)) && grep -qi 'refused' <<<"$output" && ! grep -q 'serves nothing at this address' <<<"$output"; then
+	pass "C8 refused key (${elapsed} s): $(grep -m1 -oiE '[^."]*refused[^."]*' <<<"$output" | head -1)"
+else
+	fail "C8 refused key (${elapsed} s): $output"
+fi
+
+# --- C9 no project -------------------------------------------------------------------------
+
+started=$SECONDS
+if output=$(run_other leapterE2eFlow04 'Leapter e2e no project' 9f6b1c2e-0001-4000-8000-0000000000f4 'not-a-project'); then
+	fail "C9 no project: the run succeeded: $output"
+fi
+elapsed=$((SECONDS - started))
+if grep -q 'No project selected' <<<"$output" && ((elapsed <= 20)); then
+	pass "C9 no project (${elapsed} s): No project selected"
+else
+	fail "C9 no project (${elapsed} s): $output"
 fi
 
 echo 'All checks passed.'

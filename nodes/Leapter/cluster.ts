@@ -61,8 +61,14 @@ export async function provisionKey(
       json: true,
       disableFollowRedirect: true,
     });
-  } catch {
-    // Expected while the key activates; the request that follows reports problems itself
+  } catch (error) {
+    // 401 and 404 are expected (the key activates, or that project is gone); the request that
+    // follows reports them. Anything else is preAuthentication's refusal to create the key (a 403
+    // for an environment without rights) or an unreachable cluster: waiting cannot help.
+    const status = answerOf(error)?.status;
+    if (status !== 401 && status !== 404) {
+      throw new NodeApiError(ctx.getNode(), error as JsonObject);
+    }
   }
 }
 

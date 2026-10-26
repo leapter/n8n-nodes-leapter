@@ -14,6 +14,8 @@ the oldest and the newest n8n the node supports: `N8N_VERSION` picks the `n8nio/
 | C5 revoked key | After revoking the key and waiting 65 s, succeeds within 120 s with a new key |
 | C6 overlapping field loads | Through a second credential without a key: a field load waiting for the new key, overtaken by one for a blueprint the project lacks, answers with the newer (empty) result within 20 s; the newer one within 10 s; then the blueprint's fields load |
 | C7 removed blueprint | A run of a blueprint id the project does not have fails within 20 s with "is not a public blueprint", instead of waiting a minute |
+| C8 refused key | A run of a project whose key the cluster refuses (an environment that does not exist) fails within 20 s with the refusal, not after a minute with "serves nothing at this address" |
+| C9 no project | A run whose project value is not `environment::application` fails within 20 s with "No project selected" |
 
 The script stops at the first `FAIL`. It always revokes the keys it left and removes n8n with
 `docker compose down -v` (set `E2E_KEEP=1` to keep both for debugging).
@@ -79,4 +81,6 @@ the local cluster it is read from genielabs:
 eval "$(bash e2e/prepare-local.sh)" && pnpm e2e:queue
 ```
 
-Cleanup revokes every key the run created and Q5's service key, and removes n8n.
+Cleanup revokes every key the run created and Q5's service key, and removes n8n. Tested with n8n
+2.39.6 and 2.44.5; n8n 2.0.3 cannot activate imported workflows from the CLI (it publishes only
+versions from its workflow history), so the webhooks never register there.
