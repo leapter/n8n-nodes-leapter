@@ -1,7 +1,9 @@
 # End-to-end test
 
-`pnpm e2e` (`e2e/run.sh`) builds the node, starts n8n 2.44.5 in Docker with the build as a custom
-extension, and checks the whole flow against a real Runtime Cluster. Run it before every release.
+`pnpm e2e` (`e2e/run.sh`) builds the node, starts n8n in Docker with the build as a custom
+extension, and checks the whole flow against a real Runtime Cluster. Run it before every release, on
+the oldest and the newest n8n the node supports: `N8N_VERSION` picks the `n8nio/n8n` image tag
+(default 2.44.5), e.g. `N8N_VERSION=2.0.3 pnpm e2e`.
 
 | Check | What passes |
 |-------|-------------|

@@ -198,3 +198,40 @@ test('the cluster address drops a trailing Admin UI path and slashes', () => {
   assert.equal(clusterBaseUrl(''), 'https://runtime.leapter.com');
   assert.equal(clusterBaseUrl(undefined), 'https://runtime.leapter.com');
 });
+
+test('a provisioning request goes out without any key and makes preAuthentication create the key', async () => {
+  const stub = cluster();
+  const credentials = data({
+    evalKeys: keys({ 'dev/old': { id: 'id-old', key: 'lk_dev_old', mintedAt: LONG_AGO } }),
+  });
+  const marked = await credential.authenticate(credentials, {
+    url: engine('dev/old'),
+    headers: { 'X-Leapter-Provision': 'dev/new' },
+  });
+  assert.deepEqual(marked.headers, {});
+
+  assert.deepEqual(ids(await credential.preAuthentication.call(stub, credentials)), {
+    'dev/old': 'id-old',
+    'dev/new': 'id-dev/new-1',
+  });
+  // n8n's repeat after preAuthentication comes without the mark: the engine's own key
+  const repeat = await credential.authenticate(credentials, { url: engine('dev/old'), headers: marked.headers });
+  assert.equal(repeat.headers['X-API-Key'], 'lk_dev_old');
+});
+
+test('a provisioning request for a project that has a key is an ordinary request', async () => {
+  const credentials = data({
+    evalKeys: keys({ 'dev/app': { id: 'id-app', key: 'lk_dev_app', mintedAt: LONG_AGO } }),
+  });
+  const answer = await credential.authenticate(credentials, {
+    url: engine('dev/app'),
+    headers: { 'X-Leapter-Provision': 'dev/app' },
+  });
+  assert.deepEqual(answer.headers, { 'X-API-Key': 'lk_dev_app' });
+});
+
+test('the key field stays empty until a project has a key, so n8n keeps calling preAuthentication', async () => {
+  const stub = cluster();
+  const credentials = data();
+  assert.deepEqual(await credential.preAuthentication.call(stub, credentials), { evalKeys: '' });
+});

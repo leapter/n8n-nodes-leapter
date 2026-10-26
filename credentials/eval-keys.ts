@@ -8,6 +8,12 @@ export type EvalKeyMap = Record<
 >;
 
 /**
+ * Marks a request of provisionKey() (nodes/Leapter/cluster.ts) with the project that needs a key:
+ * authenticate removes it, records the project and sends the request without any key
+ */
+export const PROVISION_HEADER = 'X-Leapter-Provision';
+
+/**
  * A key younger than this may still answer 401 while the engines pick it up; never replace it
  */
 export const GRACE_MS = 90_000;

@@ -1,9 +1,9 @@
-# n8n 2.44.5 with this repository's dist/ as a custom extension; started by e2e/run.sh
+# n8n (N8N_VERSION, default 2.44.5) with this repository's dist/ as a custom extension; started by e2e/run.sh
 name: n8n-leapter-e2e
 
 services:
   n8n:
-    image: n8nio/n8n:2.44.5
+    image: n8nio/n8n:${N8N_VERSION:-2.44.5}
     # The relay (relay.js) runs beside n8n in the same container, so it survives `restart`
     entrypoint: ['tini', '--', 'sh', '-c', 'node /e2e/relay.js & exec /docker-entrypoint.sh']
     ports:
