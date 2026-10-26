@@ -161,6 +161,9 @@ export class Leapter implements INodeType {
         type: 'resourceLocator',
         default: { mode: 'list', value: '' },
         required: true,
+        // Picked from the list only: as an AI Agent tool, n8n would otherwise offer "let the
+        // model define this", and a model cannot know the project's environment::application
+        noDataExpression: true,
         description: 'The Leapter project containing your blueprints',
         modes: [
           {

@@ -93,7 +93,7 @@ User selects project (GET {cp}/environments, then GET {cp}/environments/{env}/st
 `{cp}` is `{clusterUrl}/runtime-management`. `{runBase}` is read once per execution by `readRunBase()` (`nodes/Leapter/cluster.ts`).
 
 ### Saved Parameter Values
-- **Project**: a resource locator (list mode only): `{ __rl: true, mode: 'list', value: 'environment::application' }` (application slug); read with `{ extractValue: true }` (`projectOf()` in load-options methods)
+- **Project**: a resource locator (list mode only, `noDataExpression`: as an AI Agent tool n8n would otherwise offer "let the model define this", and a model cannot know `environment::application`): `{ __rl: true, mode: 'list', value: 'environment::application' }` (application slug); read with `{ extractValue: true }` (`projectOf()` in load-options methods)
 - **Operation**: the blueprint id from `status` (`callable[].id`)
 
 Split by `splitProject()` (undefined unless both parts are there); `execute` checks it per item, as an expression may give each item its own project.
