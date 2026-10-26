@@ -16,12 +16,13 @@ import type {
 } from 'n8n-workflow';
 import { NodeApiError, NodeConnectionTypes, NodeOperationError, sleep } from 'n8n-workflow';
 import {
+  RUN_ADDRESS_MISSING,
   answerOf,
-  assertHttps,
   clusterError,
   clusterUrlOf,
+  isControlPlaneAnswer,
   provisionKey,
-  readRunBase,
+  runBaseOf,
 } from './cluster';
 import { newestLoad } from './newest-load';
 
@@ -125,7 +126,7 @@ const NO_INPUTS_FIELD = '__leapter_no_inputs';
 
 function isActivating(error: unknown): boolean {
   const httpCode = (error as { httpCode?: string | null }).httpCode;
-  return httpCode === '401' || httpCode === '404';
+  return (httpCode === '401' || httpCode === '404') && !isControlPlaneAnswer(error);
 }
 
 export class Leapter implements INodeType {
@@ -436,13 +437,9 @@ export class Leapter implements INodeType {
           }
 
           const spec = await getOpenApiSpec(this, environment, application, superseded);
-          if (spec === null) {
+          if (typeof spec === 'string') {
             // n8n shows this notice; it does not show errors thrown here
-            return {
-              fields: [],
-              // Below the activation notice, so it says only what changed: the automatic wait ended
-              emptyFieldsNotice: `Access to ${application} is still not active after a minute. Click Retry to try again.`,
-            };
+            return { fields: [], emptyFieldsNotice: spec };
           }
 
           return operationFields(this, spec, blueprintId);
@@ -458,9 +455,8 @@ export class Leapter implements INodeType {
     // Get n8n execution ID for correlation (used for server-side logging)
     const executionId = this.getExecutionId();
 
-    // The address the cluster answers runs on, once per execution
-    const runBase = await readRunBase(this, await clusterUrlOf(this));
-    assertHttps(this, runBase);
+    // From the credential: a run with a key is one request per item
+    const runBase = await runBaseOf(this);
 
     for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
       try {
@@ -656,8 +652,7 @@ async function prewarm(
   application: string,
 ): Promise<void> {
   try {
-    const runBase = await readRunBase(ctx, await clusterUrlOf(ctx));
-    assertHttps(ctx, runBase);
+    const runBase = await runBaseOf(ctx);
     await provisionKey(ctx, runBase, environment, application);
     await ctx.helpers.httpRequestWithAuthentication.call(ctx, CREDENTIAL_TYPE, {
       method: 'GET',
@@ -821,19 +816,21 @@ function operationFields(
 }
 
 /**
- * The project's OpenAPI document from the engine, or null when access is still being activated
- * (401 or 404) after the last retry, or when a newer field load superseded this one. This
- * request gets the project's evaluation key from the credential; its first refusal makes the
- * credential create the key, so the key exists before the workflow first runs.
+ * The project's OpenAPI document from the engine, or the notice to show instead: when access is
+ * still being activated (401 or 404) after the last retry, or a newer field load superseded this
+ * one (newestLoad() answers with that one's result), or the engine request reached the control
+ * plane. This request gets the project's evaluation key from the credential; its first refusal
+ * makes the credential create the key, so the key exists before the workflow first runs.
  */
 async function getOpenApiSpec(
   ctx: ILoadOptionsFunctions,
   environment: string,
   application: string,
   superseded: () => boolean,
-): Promise<OpenAPISpec | null> {
-  const runBase = await readRunBase(ctx, await clusterUrlOf(ctx));
-  assertHttps(ctx, runBase);
+): Promise<OpenAPISpec | string> {
+  const runBase = await runBaseOf(ctx);
+  // Below the activation notice, so it says only what changed: the automatic wait ended
+  const stillActivating = `Access to ${application} is still not active after a minute. Click Retry to try again.`;
 
   // The editor shows its loading state meanwhile; after the last retry the caller shows the
   // activation notice with n8n's Retry
@@ -847,15 +844,18 @@ async function getOpenApiSpec(
         disableFollowRedirect: true,
       })) as OpenAPISpec;
     } catch (error) {
+      if (isControlPlaneAnswer(error)) {
+        return RUN_ADDRESS_MISSING;
+      }
       if (!isActivating(error)) {
         throw clusterError(ctx, error, 'Failed to load the blueprint fields');
       }
       if (retries >= MAX_RETRIES || superseded()) {
-        return null;
+        return stillActivating;
       }
       await sleep(RETRY_INTERVAL_MS);
       if (superseded()) {
-        return null;
+        return stillActivating;
       }
     }
   }

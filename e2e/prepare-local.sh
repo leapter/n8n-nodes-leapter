@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepares the local Runtime Cluster for e2e/run.sh and prints its six inputs as export lines:
+# Prepares the local Runtime Cluster for e2e/run.sh and prints its inputs as export lines:
 #   eval "$(bash e2e/prepare-local.sh)" && pnpm e2e
 #
 # Needs ADMIN_KEY (a key of an administrator of the local cluster), APPLICATION (a project deployed
@@ -58,6 +58,7 @@ echo "prepare-local: created service key $SERVICE_KEY_ID" >&2
 
 cat <<EOF
 export CLUSTER_URL=http://localhost:3002
+export RUN_URL=http://localhost:3003
 export SERVICE_KEY=$SERVICE_KEY
 export ENVIRONMENT=dev
 export APPLICATION=$APPLICATION

@@ -36,6 +36,12 @@ test('a refusal does not claim the key was revoked when the environment may be t
   assert.match(message, /Service accounts → n8n/);
 });
 
+test("the control plane's unknown-endpoint 404 names Run Address; an engine's 404 does not", () => {
+  const unknown = { type: 'https://docs.leapter.com/problems/runtime-management/unknown-endpoint' };
+  assert.match(describeClusterError(404, unknown, {}), /Run Address/);
+  assert.match(describeClusterError(404, '404 page not found', {}), /about a minute/);
+});
+
 // A context whose credential holds a key for dev/held; the marked request fails with `status`
 function provisionContext(status) {
   const calls = [];

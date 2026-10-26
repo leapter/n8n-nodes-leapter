@@ -22,7 +22,7 @@ pnpm e2e              # n8n in Docker against a Runtime Cluster (e2e/README.md)
 pnpm e2e:queue        # the same in n8n queue mode: main and worker share keys through the credential
 ```
 
-Against a local cluster from a host-run n8n (`pnpm dev`), start it as `NODE_OPTIONS=--dns-result-order=ipv4first pnpm dev`: the cluster names its run address `http://localhost:3003`, that port listens on IPv4 only, and n8n's HTTP client does not fall back from `::1`.
+Against a local cluster from a host-run n8n (`pnpm dev`), start it as `NODE_OPTIONS=--dns-result-order=ipv4first pnpm dev`: the cluster answers runs on `http://localhost:3003` (the credential's Run Address), that port listens on IPv4 only, and n8n's HTTP client does not fall back from `::1`.
 
 Releases are cut from the GitHub Releases UI (draft a release with a `vX.Y.Z` tag, publish it). `publish.yml` derives the npm version from the tag; the `version` in `package.json` is a permanent placeholder — never bump it.
 
@@ -90,7 +90,7 @@ User selects project (GET {cp}/environments, then GET {cp}/environments/{env}/st
 → blueprint (callable[] of that application) → input fields from the engine's OpenAPI document
 → Execute POST {runBase}/runtime/api/v1/{env}/{app}/models/{blueprintId}/runs
 ```
-`{cp}` is `{clusterUrl}/runtime-management`. `{runBase}` is read once per execution by `readRunBase()` (`nodes/Leapter/cluster.ts`).
+`{cp}` is `{clusterUrl}/runtime-management`. `{runBase}` is the credential's Run Address (`runUrl`), or the Leapter Server (`clusterUrl`, path included) when that is empty: `runBaseOf()` (`nodes/Leapter/cluster.ts`). Nothing asks the cluster for it, so a run with a stored key is one request per item.
 
 ### Saved Parameter Values
 - **Project**: a resource locator (list mode only, `noDataExpression`: as an AI Agent tool n8n would otherwise offer "let the model define this", and a model cannot know `environment::application`): `{ __rl: true, mode: 'list', value: 'environment::application' }` (application slug); read with `{ extractValue: true }` (`projectOf()` in load-options methods)
@@ -107,7 +107,6 @@ Project is a resource locator, not an `options` dropdown: n8n 2.39+ (not 2.0.3) 
 - `POST {cp}/environments/{env}/applications/{app}/keys/{id}/revoke` - Revokes a replaced evaluation key
 - `GET {runBase}/runtime/api/v1/{env}/{app}/openapi` - The project's OpenAPI 3.0 document
 - `POST {runBase}/runtime/api/v1/{env}/{app}/models/{blueprintId}/runs` - Executes a blueprint
-- `GET {origin}/runtime-management/ui/config.json` - Public, no credential: `runBaseUrl`, or the origin when null, 404 or 410 (same rule as the Leapter CLI)
 
 All requests use `disableFollowRedirect: true`; `assertHttps()` refuses non-https addresses except `localhost`/`127.0.0.1` (`isSecureAddress()`), and `authenticate` refuses them too before adding any key, the credential test included. `clusterBaseUrl()` (`credentials/eval-keys.ts`) reads the credential's address: the default when unset, without trailing slashes or a pasted `/runtime-management/…` path.
 
@@ -131,7 +130,8 @@ All requests use `disableFollowRedirect: true`; `assertHttps()` refuses non-http
   - n8n never cancels a field request; the editor ends its loading state with the first answer and keeps the last. So all field loads of one credential (`fieldLoadCaller()`) go through `newestLoad()`: a superseded load stops its retries and answers with the newest load's result. n8n gives a loader no node, workflow or user identity (it runs as "Temp-Node"); two people sharing a credential and loading fields in the same activation minute could get each other's answer.
   - Before waiting, `getOperationFields` checks that the blueprint is one of the project's (`/status`): after a project switch n8n asks once with the old blueprint, and that answers an empty list at once.
   - `getOperations` pre-warms the project's key: one engine request through the credential, not awaited, so a missing key is created while the user picks the blueprint.
-- **Credential**: `clusterUrl` (display name "Leapter Server") is shown only under `showAdvanced`; its default is `https://runtime.leapter.com`
+- **Credential**: `clusterUrl` (display name "Leapter Server") and `runUrl` ("Run Address", empty by default) are shown only under `showAdvanced`; `clusterUrl`'s default is `https://runtime.leapter.com`. Changing Run Address keeps the evaluation keys: they belong to the Leapter Server.
+- **Missing Run Address**: an engine request that reaches the control plane gets a 404 with `type` `…/runtime-management/unknown-endpoint` (`isControlPlaneAnswer()`); an engine answers a project it does not serve with a plain-text 404. That 404 is not activation: a run fails at once and the field list shows `RUN_ADDRESS_MISSING` instead of waiting a minute.
 - **Array fields** are passed as JSON strings in visual mode, parsed via `tryParseJson()`
 - **Response metadata**: Adds `_metadata.runId` (from `x-run-id` header); requests send the n8n execution ID as `X-Correlation-Id`
 - **$ref resolution**: `resolveSchema()` handles `#/components/schemas/...` references

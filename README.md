@@ -107,15 +107,16 @@ One Leapter credential gives access to every project in the environments its ser
 
 1. **Deploy the project** in the Leapter Lab to an environment of your Runtime Cluster.
 2. **Create a key for the `n8n` service account** in the Runtime Cluster's Admin UI: **Service accounts → n8n → Create key**. Copy the key (starts with `lk_mgmt_`).
-3. **Create the credential** in n8n: add a "Leapter API" credential, paste that key and save; n8n tests it. For a self-hosted or development cluster, turn on **Advanced Settings** and enter its address as **Leapter Server**.
+3. **Create the credential** in n8n: add a "Leapter API" credential, paste that key and save; n8n tests it. For a self-hosted or development cluster, turn on **Advanced Settings** and enter its address as **Leapter Server**, and **Run Address** when it answers runs on another address.
 
 ### Credential Fields
 
 | Field | Description | Required |
 |-------|-------------|----------|
 | Service Key | A key of the `n8n` service account (starts with `lk_mgmt_`) | Yes |
-| Advanced Settings | Shows the server field | No |
+| Advanced Settings | Shows the address fields | No |
 | Leapter Server | The Leapter Runtime Cluster: the Admin UI's address without `/runtime-management/ui`. Default `https://runtime.leapter.com`; only change for self-hosted clusters or development | No |
+| Run Address | Where the cluster answers blueprint runs. Empty means the Leapter Server; a local cluster answers them on `http://localhost:3003` | No |
 
 The credential also keeps the access keys it creates for each project, in a field n8n does not show. Anyone who can read the credential in n8n can read them.
 
