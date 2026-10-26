@@ -19,6 +19,7 @@ pnpm lint:fix         # Auto-fix lint errors
 pnpm dev              # Start dev mode with n8n
 pnpm test             # tsc, then unit tests (node:test, test/*.test.mjs against dist/)
 pnpm e2e              # n8n in Docker against a Runtime Cluster (e2e/README.md)
+pnpm e2e:queue        # the same in n8n queue mode: main and worker share keys through the credential
 ```
 
 Against a local cluster from a host-run n8n (`pnpm dev`), start it as `NODE_OPTIONS=--dns-result-order=ipv4first pnpm dev`: the cluster names its run address `http://localhost:3003`, that port listens on IPv4 only, and n8n's HTTP client does not fall back from `::1`.
