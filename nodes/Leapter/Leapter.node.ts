@@ -132,7 +132,8 @@ export class Leapter implements INodeType {
   description: INodeTypeDescription = {
     displayName: 'Leapter',
     name: 'leapter',
-    icon: 'file:leapter.svg',
+    // The dark variant brightens the gradient for dark backgrounds
+    icon: { light: 'file:leapter.svg', dark: 'file:leapter.dark.svg' },
     group: ['transform'],
     version: 1,
     subtitle: '={{$parameter["project"]?.split("::")[1] || ""}}',
@@ -211,7 +212,7 @@ export class Leapter implements INodeType {
         description: 'How to provide operation parameters',
       },
 
-      // 4. Activation notice: shown while a project is chosen and its fields are not loaded yet.
+      // 4. Activation notice: shown while a blueprint is chosen and its fields are not loaded yet.
       // n8n cannot show emptyFieldsNotice during a load, so this static notice explains the wait
       // and hides itself once the resource mapper's schema has entries. Paths into a parameter
       // start with `/` (from the node's root): n8n before 2.40 cannot order a dependency named
@@ -225,6 +226,7 @@ export class Leapter implements INodeType {
         displayOptions: {
           show: {
             project: [{ _cnd: { exists: true } }],
+            operation: [{ _cnd: { exists: true } }],
             inputMode: ['visual'],
           },
           hide: {
@@ -435,7 +437,8 @@ export class Leapter implements INodeType {
             // n8n shows this notice; it does not show errors thrown here
             return {
               fields: [],
-              emptyFieldsNotice: `Access to ${application} is being activated, which takes up to a minute. Click Retry in a moment.`,
+              // Below the activation notice, so it says only what changed: the automatic wait ended
+              emptyFieldsNotice: `Access to ${application} is still not active after a minute. Click Retry to try again.`,
             };
           }
 

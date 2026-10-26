@@ -97,7 +97,7 @@ The Leapter node provides dynamic operations based on the Blueprints deployed to
    - **JSON Mode**: Provide raw JSON input for advanced use cases
 4. Execute and receive results with the run ID
 
-The first use of a project creates its access key automatically; the node starts this as soon as you choose the project. The key takes up to a minute to become active. Meanwhile a yellow note says "On first use, Leapter activates access to this project. This can take up to a minute; the fields load automatically.", n8n shows "Fetching parameters", and the node asks again every 10 s, up to 6 times. The fields then appear by themselves and the note disappears; you do not need to click anything. Only if the key is still not active after a minute does the list say "Access to <project> is being activated, which takes up to a minute. Click Retry in a moment." A first run waits the same way and then notes in its output: "Access to <project> was activated; this run waited <n> s." Later runs start at once. A Blueprint without inputs shows "This blueprint takes no inputs. Run it as it is." and runs with an empty input.
+The first use of a project creates its access key automatically; the node starts this as soon as you choose the project. The key takes up to a minute to become active. Once you have chosen the blueprint, a yellow note says "On first use, Leapter activates access to this project. This can take up to a minute; the fields load automatically.", n8n shows "Fetching parameters", and the node asks again every 10 s, up to 6 times. The fields then appear by themselves and the note disappears; you do not need to click anything. Only if the key is still not active after a minute does the list say "Access to <project> is still not active after a minute. Click Retry to try again." A first run waits the same way and then notes in its output: "Access to <project> was activated; this run waited <n> s." Later runs start at once. A Blueprint without inputs shows "This blueprint takes no inputs. Run it as it is." and runs with an empty input.
 
 ## Credentials
 
@@ -171,7 +171,7 @@ Runs appear in the Admin UI under **Runs**, with the n8n execution ID as their c
 | 429 or 503 | The cluster's `detail`, plus "Retry after <n> s" when the cluster says so. Use n8n's **Retry On Fail** setting to retry automatically. |
 | Any other | The cluster's `detail`, else its `title`, else "Request failed with status <n>" |
 
-While loading the field list, a 401 or 404 is retried the same way; only if it persists does the list show "Access to <project> is being activated, which takes up to a minute. Click Retry in a moment."
+While loading the field list, a 401 or 404 is retried the same way; only if it persists does the list show "Access to <project> is still not active after a minute. Click Retry to try again."
 
 With **Continue On Fail**, a failed item outputs `{ error, statusCode, ...body }`.
 
