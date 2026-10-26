@@ -74,7 +74,7 @@ export async function provisionKey(
 
 /**
  * The address the cluster answers runs on, from its public config.json.
- * Same rule as the CLI (`apps/cli/src/commands/control-plane/cluster-config.ts` in genielabs):
+ * Same rule as the Leapter CLI:
  * 404 or 410 means the cluster serves no Admin UI and answers runs on its own origin.
  */
 export async function readRunBase(ctx: Context, clusterUrl: string): Promise<string> {
@@ -165,15 +165,14 @@ interface ProblemBody {
   errors?: Array<{ field?: unknown; message?: unknown }>;
   properties?: {
     exception?: { type?: unknown };
-    // The blueprint's own errors (genielabs `apps/runtime/src/http/execute-handler.ts`)
+    // The blueprint's own errors (the runtime's answer to a failed run)
     errorOutput?: Array<{ detail?: unknown; title?: unknown }>;
   };
 }
 
 /**
  * A message for a cluster answer that tells a wrong key, a not yet served application and a
- * blueprint error apart. Error shapes: genielabs `apps/runtime/src/utils/validation.ts` (400) and
- * `apps/runtime/src/http/execute-handler.ts` (500).
+ * blueprint error apart. Error shapes: the runtime's validation errors (400) and failed runs (500).
  */
 export function describeClusterError(
   status: number,

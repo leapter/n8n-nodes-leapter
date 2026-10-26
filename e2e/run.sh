@@ -15,7 +15,7 @@ Runs n8n in Docker with this repository's build and checks against a Runtime Clu
   refuses fails at once with the refusal, C9 a run without a valid project fails at once.
 
 Inputs (environment variables, all required):
-  CLUSTER_URL    The cluster's address, e.g. http://localhost:3002 or https://dev.runtime.leapter.com
+  CLUSTER_URL    The cluster's address, e.g. http://localhost:3002 or https://runtime.leapter.com
   SERVICE_KEY    An operator service key of the environment (lk_mgmt_...)
   ENVIRONMENT    Environment slug, e.g. dev
   APPLICATION    Application (project) slug with a public blueprint
@@ -25,7 +25,7 @@ Inputs (environment variables, all required):
 Optional: N8N_VERSION (the n8nio/n8n image tag, default 2.44.5), E2E_N8N_PORT (default 5691),
 E2E_KEEP=1 keeps n8n running and the key unrevoked.
 
-For the local cluster: eval "$(bash e2e/prepare-local.sh)" && pnpm e2e
+For the local cluster (ADMIN_KEY: an admin key of it): eval "$(bash e2e/prepare-local.sh)" && pnpm e2e
 EOF
 }
 
