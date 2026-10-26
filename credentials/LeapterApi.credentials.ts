@@ -10,6 +10,7 @@ import type {
 import {
   DEFAULT_CLUSTER_URL,
   GRACE_MS,
+  PROVISION_HEADER,
   RECENT_USE_MS,
   clusterBaseUrl,
   currentKeys,
@@ -106,7 +107,8 @@ async function refreshKeys(
   if (refusal !== undefined) {
     throw refusal;
   }
-  return { evalKeys: JSON.stringify(map) };
+  // Empty while no project has a key: n8n then runs preAuthentication before every request
+  return { evalKeys: Object.keys(map).length > 0 ? JSON.stringify(map) : '' };
 }
 
 /**
@@ -204,6 +206,17 @@ export class LeapterApi implements ICredentialType {
     }
     const path = pathOf(url);
 
+    // provisionKey(): no key at all, so this engine answers 401 and n8n runs preAuthentication,
+    // which creates the named project's key. n8n's repeat after that comes without the mark.
+    const provision = headers[PROVISION_HEADER];
+    delete headers[PROVISION_HEADER];
+    if (typeof provision === 'string' && !currentKeys(credentials)[provision]) {
+      const state = keyState(credentials);
+      state.pending.add(provision);
+      state.lastRequested = provision;
+      return { ...requestOptions, headers };
+    }
+
     if (path.includes('/runtime-management/')) {
       headers.Authorization = `Bearer ${credentials.serviceKey as string}`;
     } else {
@@ -226,10 +239,10 @@ export class LeapterApi implements ICredentialType {
     return { ...requestOptions, headers };
   }
 
-  // Runs before the first request, after every 401 and on every credential test: creates missing
-  // evaluation keys and replaces rejected ones. n8n stores the returned evalKeys in the credential.
-  // One call at a time per credential, so parallel requests neither create a key twice nor store
-  // an older map over a newer one.
+  // Runs before every request while evalKeys is empty, after every 401 and on every credential
+  // test (every n8n version since 2.0): creates missing evaluation keys and replaces rejected ones.
+  // n8n stores the returned evalKeys in the credential. One call at a time per credential, so
+  // parallel requests neither create a key twice nor store an older map over a newer one.
   async preAuthentication(
     this: IHttpRequestHelper,
     credentials: ICredentialDataDecryptedObject,

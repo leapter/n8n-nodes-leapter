@@ -18,7 +18,7 @@ import {
   assertHttps,
   clusterError,
   clusterUrlOf,
-  engineCredentialOptions,
+  provisionKey,
   readRunBase,
 } from './cluster';
 import { newestLoad } from './newest-load';
@@ -202,7 +202,9 @@ export class Leapter implements INodeType {
 
       // 4. Activation notice: shown while a project is chosen and its fields are not loaded yet.
       // n8n cannot show emptyFieldsNotice during a load, so this static notice explains the wait
-      // and hides itself once the resource mapper's schema has entries.
+      // and hides itself once the resource mapper's schema has entries. Paths into a parameter
+      // start with `/` (from the node's root): n8n before 2.40 cannot order a dependency named
+      // `parameters.schema` and fails every run with "Could not resolve parameter dependencies".
       {
         displayName:
           'On first use, Leapter activates access to this project. This can take up to a minute; the fields load automatically.',
@@ -215,7 +217,7 @@ export class Leapter implements INodeType {
             inputMode: ['visual'],
           },
           hide: {
-            'parameters.schema': [{ _cnd: { exists: true } }],
+            '/parameters.schema': [{ _cnd: { exists: true } }],
           },
         },
       },
@@ -230,7 +232,7 @@ export class Leapter implements INodeType {
         displayOptions: {
           show: {
             inputMode: ['visual'],
-            'parameters.schema[0].id': [NO_INPUTS_FIELD],
+            '/parameters.schema[0].id': [NO_INPUTS_FIELD],
           },
         },
       },
@@ -509,11 +511,11 @@ export class Leapter implements INodeType {
         let response: { body: unknown; headers: Record<string, string> };
         for (let retries = 0; ; retries++) {
           try {
+            await provisionKey(this, runBase, environment, application);
             response = await this.helpers.httpRequestWithAuthentication.call(
               this,
               CREDENTIAL_TYPE,
               requestOptions,
-              await engineCredentialOptions(this, environment, application),
             );
             if (retries > 0) {
               const waited = Math.round((Date.now() - firstAttempt) / 1000);
@@ -620,8 +622,8 @@ async function getApplications(
 }
 
 /**
- * One engine request for the project through the credential: a refusal (401, or 404 while the
- * credential has no key) makes the credential create the project's key
+ * One engine request for the project through the credential, after provisionKey(): a missing key
+ * is created while the user picks the blueprint
  */
 async function prewarm(
   ctx: ILoadOptionsFunctions,
@@ -631,17 +633,13 @@ async function prewarm(
   try {
     const runBase = await readRunBase(ctx, await clusterUrlOf(ctx));
     assertHttps(ctx, runBase);
-    await ctx.helpers.httpRequestWithAuthentication.call(
-      ctx,
-      CREDENTIAL_TYPE,
-      {
-        method: 'GET',
-        url: `${runBase}/runtime/api/v1/${environment}/${application}/openapi`,
-        json: true,
-        disableFollowRedirect: true,
-      },
-      await engineCredentialOptions(ctx, environment, application),
-    );
+    await provisionKey(ctx, runBase, environment, application);
+    await ctx.helpers.httpRequestWithAuthentication.call(ctx, CREDENTIAL_TYPE, {
+      method: 'GET',
+      url: `${runBase}/runtime/api/v1/${environment}/${application}/openapi`,
+      json: true,
+      disableFollowRedirect: true,
+    });
   } catch {
     // Ignored: the field list asks again and reports problems itself
   }
@@ -773,17 +771,13 @@ async function getOpenApiSpec(
   // activation notice with n8n's Retry
   for (let retries = 0; ; retries++) {
     try {
-      return (await ctx.helpers.httpRequestWithAuthentication.call(
-        ctx,
-        CREDENTIAL_TYPE,
-        {
-          method: 'GET',
-          url: `${runBase}/runtime/api/v1/${environment}/${application}/openapi`,
-          json: true,
-          disableFollowRedirect: true,
-        },
-        await engineCredentialOptions(ctx, environment, application),
-      )) as OpenAPISpec;
+      await provisionKey(ctx, runBase, environment, application);
+      return (await ctx.helpers.httpRequestWithAuthentication.call(ctx, CREDENTIAL_TYPE, {
+        method: 'GET',
+        url: `${runBase}/runtime/api/v1/${environment}/${application}/openapi`,
+        json: true,
+        disableFollowRedirect: true,
+      })) as OpenAPISpec;
     } catch (error) {
       if (!isActivating(error)) {
         throw clusterError(ctx, error, 'Failed to load the blueprint fields');

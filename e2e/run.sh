@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end test of the Leapter n8n node: n8n 2.44.5 in Docker against a real Runtime Cluster.
+# End-to-end test of the Leapter n8n node: n8n (N8N_VERSION, default 2.44.5) in Docker against a real Runtime Cluster.
 # See e2e/README.md.
 set -euo pipefail
 
@@ -7,7 +7,7 @@ usage() {
 	cat <<'EOF'
 Usage: pnpm e2e            (or: bash e2e/run.sh)
 
-Runs n8n 2.44.5 in Docker with this repository's build and checks against a Runtime Cluster:
+Runs n8n in Docker with this repository's build and checks against a Runtime Cluster:
   C1 credential test, C2 first run (one key created), C3 second run (same key),
   C4 run after an n8n restart (same key), C5 run after the key was revoked (new key),
   C6 overlapping field loads answer with the newest one's result,
@@ -21,7 +21,8 @@ Inputs (environment variables, all required):
   BLUEPRINT_ID   The blueprint's id (callable[].id in the environment's status)
   INPUT_JSON     The run's input, e.g. {"userInput": "n8n e2e"}
 
-Optional: E2E_N8N_PORT (default 5691), E2E_KEEP=1 keeps n8n running and the key unrevoked.
+Optional: N8N_VERSION (the n8nio/n8n image tag, default 2.44.5), E2E_N8N_PORT (default 5691),
+E2E_KEEP=1 keeps n8n running and the key unrevoked.
 
 For the local cluster: eval "$(bash e2e/prepare-local.sh)" && pnpm e2e
 EOF
@@ -114,13 +115,20 @@ trap cleanup EXIT
 
 wait_for_n8n() {
 	for _ in $(seq 1 120); do
-		curl -sf "$N8N/healthz/readiness" >/dev/null && return 0
+		# n8n 2.0 reports ready before its REST routes answer
+		curl -sf "$N8N/healthz/readiness" >/dev/null && curl -sf "$N8N/rest/settings" >/dev/null && return 0
 		sleep 1
 	done
 	fail "setup: n8n did not become ready at $N8N"
 }
 
 login() {
+	curl -sf -c "$WORK/cookies" -X POST "$N8N/rest/login" -H 'Content-Type: application/json' \
+		-d "$OWNER_LOGIN" >/dev/null && return 0
+	# Before n8n 2.x took the owner from the environment (N8N_INSTANCE_OWNER_*), set it up once
+	curl -sf -X POST "$N8N/rest/owner/setup" -H 'Content-Type: application/json' \
+		-d '{"email": "e2e@leapter.test", "firstName": "E2E", "lastName": "Owner", "password": "e2e-Owner-Pass-1"}' \
+		>/dev/null || fail 'setup: owner login failed'
 	curl -sf -c "$WORK/cookies" -X POST "$N8N/rest/login" -H 'Content-Type: application/json' \
 		-d "$OWNER_LOGIN" >/dev/null || fail 'setup: owner login failed'
 }
@@ -165,7 +173,7 @@ run_workflow() {
 
 # --- Setup ---------------------------------------------------------------------------------
 
-echo "Cluster $CLUSTER_URL, project $KEY_PATH, blueprint $BLUEPRINT_ID${RELAY_PORTS:+, relayed ports $RELAY_PORTS}"
+echo "n8n ${N8N_VERSION:-2.44.5}, cluster $CLUSTER_URL, project $KEY_PATH, blueprint $BLUEPRINT_ID${RELAY_PORTS:+, relayed ports $RELAY_PORTS}"
 pnpm --dir "$ROOT" build >/dev/null || fail 'setup: pnpm build failed'
 compose down -v >/dev/null 2>&1 || true
 compose up -d >/dev/null 2>&1 || fail 'setup: docker compose up failed'
@@ -281,7 +289,7 @@ fi
 
 # A blueprint id the project does not have answers 404 like a project still activating; the run
 # asks the cluster once and fails at once instead of waiting a minute
-jq '.id = "leapterE2eFlow02" | .name = "Leapter e2e removed blueprint"
+jq '.id = "leapterE2eFlow02" | .name = "Leapter e2e removed blueprint" | .versionId = "9f6b1c2e-0001-4000-8000-0000000000f2"
 	| .nodes[1].parameters.operation = "00000000-0000-4000-8000-000000000000"' \
 	"$WORK/workflow.json" >"$WORK/workflow-removed.json"
 compose exec -T n8n sh -c 'cat > /tmp/workflow-removed.json && n8n import:workflow --input=/tmp/workflow-removed.json' \

@@ -1,6 +1,11 @@
 import type { IExecuteFunctions, ILoadOptionsFunctions, JsonObject } from 'n8n-workflow';
 import { NodeApiError, NodeOperationError } from 'n8n-workflow';
-import { clusterBaseUrl, currentKeys, isSecureAddress } from '../../credentials/eval-keys';
+import {
+  PROVISION_HEADER,
+  clusterBaseUrl,
+  currentKeys,
+  isSecureAddress,
+} from '../../credentials/eval-keys';
 
 type Context = IExecuteFunctions | ILoadOptionsFunctions;
 
@@ -27,25 +32,38 @@ export async function clusterUrlOf(ctx: Context): Promise<string> {
 }
 
 /**
- * Credential options for an engine request (the third argument of httpRequestWithAuthentication).
- * A project that has never had an evaluation key is not served: its engine answers 404, not 401,
- * and n8n re-runs the credential's preAuthentication only on 401 unless told otherwise. So while
- * the credential holds no key for the project, a 404 makes it create one too. With a key, 404
- * stays a plain "not routed yet" and never replaces the key.
+ * Makes n8n create the project's evaluation key before an engine request. n8n creates keys only in
+ * the credential's preAuthentication, which every version since 2.0 runs while the credential holds
+ * no key and after a 401. A project that has never had a key is not served: its engine answers 404,
+ * not 401. So while the credential holds keys of other projects but not this one, one request goes
+ * to the engine of a project it holds a key for, marked with this project (PROVISION_HEADER), and
+ * authenticate sends it without a key: that engine answers 401, and preAuthentication creates this
+ * project's key. While the credential holds no key at all, the marked request only names the
+ * project, and the next request's preAuthentication creates the key.
  */
-export async function engineCredentialOptions(
+export async function provisionKey(
   ctx: Context,
+  runBase: string,
   environment: string,
   application: string,
-): Promise<Parameters<IExecuteFunctions['helpers']['httpRequestWithAuthentication']>[2]> {
-  const credentials = await ctx.getCredentials('leapterApi');
-  if (currentKeys(credentials)[`${environment}/${application}`]) {
-    return undefined;
+): Promise<void> {
+  const project = `${environment}/${application}`;
+  const keys = currentKeys(await ctx.getCredentials('leapterApi'));
+  if (keys[project]) {
+    return;
   }
-  // Honoured by n8n's request helper (2.44.5); not yet in n8n-workflow's published types
-  return { preAuthenticationRetryStatusCode: [401, 404] } as Parameters<
-    IExecuteFunctions['helpers']['httpRequestWithAuthentication']
-  >[2];
+  const via = Object.keys(keys)[0] ?? project;
+  try {
+    await ctx.helpers.httpRequestWithAuthentication.call(ctx, 'leapterApi', {
+      method: 'GET',
+      url: `${runBase}/runtime/api/v1/${via}/openapi`,
+      headers: { [PROVISION_HEADER]: project },
+      json: true,
+      disableFollowRedirect: true,
+    });
+  } catch {
+    // Expected while the key activates; the request that follows reports problems itself
+  }
 }
 
 /**

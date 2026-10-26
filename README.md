@@ -122,7 +122,7 @@ The credential also keeps the access keys it creates for each project, in a fiel
 ## Compatibility
 
 - **Minimum n8n version**: 2.0.0
-- **Tested with**: n8n 2.44.5
+- **Tested with**: n8n 2.0.3, 2.39.6 and 2.44.5
 
 ## Usage
 
