@@ -499,13 +499,12 @@ export class Leapter implements INodeType {
             }
           }
         } else {
-          // JSON mode
-          const parametersJson = this.getNodeParameter(
-            'parametersJson',
-            itemIndex,
-            '{}',
-          ) as string;
-          bodyParams = JSON.parse(parametersJson) as IDataObject;
+          // JSON mode: text, or an object when an expression gives one (e.g. an AI Agent's
+          // $fromAI(…, 'json'))
+          const parametersJson = this.getNodeParameter('parametersJson', itemIndex, '{}') as
+            | string
+            | IDataObject;
+          bodyParams = parseJsonInput(this, parametersJson, itemIndex);
         }
 
         // The credential adds the project's evaluation key. HTTP errors must throw: n8n
@@ -666,6 +665,35 @@ async function prewarm(
   } catch {
     // Ignored: the field list asks again and reports problems itself
   }
+}
+
+/**
+ * The JSON input as an object: parsed from text, or taken as it is. Anything but a JSON object
+ * fails with a message that says so.
+ */
+function parseJsonInput(
+  ctx: IExecuteFunctions,
+  value: string | IDataObject,
+  itemIndex: number,
+): IDataObject {
+  let input: unknown = value;
+  if (typeof value === 'string') {
+    try {
+      input = JSON.parse(value);
+    } catch (error) {
+      throw new NodeOperationError(
+        ctx.getNode(),
+        `Parameters (JSON) is not valid JSON: ${(error as Error).message}`,
+        { itemIndex },
+      );
+    }
+  }
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    throw new NodeOperationError(ctx.getNode(), 'Parameters (JSON) must be a JSON object.', {
+      itemIndex,
+    });
+  }
+  return input as IDataObject;
 }
 
 /**

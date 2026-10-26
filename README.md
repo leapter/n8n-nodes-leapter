@@ -144,6 +144,15 @@ For advanced users or complex payloads:
 3. Enter your parameters as a JSON object
 4. Refer to the OpenAPI spec for field definitions
 
+### As a tool of an AI Agent
+
+Connect the Leapter node to an AI Agent's **Tool** input, choose project and blueprint, and describe the tool in **Description**. The model can supply the inputs:
+
+- **Visual Mapping**: let the model define each field (the ✨ button, or `{{ $fromAI('claimAmount', 'Claim amount', 'number') }}`).
+- **JSON**: `{{ $fromAI('claim', 'The claim as a JSON object: {...}', 'json') }}`; the node takes the object as it is.
+
+The run's result, including `_metadata.runId`, goes back to the agent.
+
 ### Example Workflow
 
 ```
