@@ -143,7 +143,7 @@ login() {
 # Read with the n8n CLI: the REST API redacts the keys like every password field.
 stored_keys() {
 	compose exec -T n8n n8n export:credentials --id="${1:-$CREDENTIAL_ID}" --decrypted 2>/dev/null |
-		sed -n '/^\[/,$p' | jq -c '.[0].data.evalKeys // "" | if . == "" then {} else fromjson end'
+		sed -n '/^\[/,/^\]/p' | jq -c '.[0].data.evalKeys // "" | if . == "" then {} else fromjson end'
 }
 
 stored_key_id() {
@@ -173,8 +173,9 @@ run_workflow() {
 		tail -5 "$WORK/execute.log"
 		return 1
 	fi
-	# The CLI prints log lines before the JSON
-	sed -n '/^{/,$p' <<<"$output" | jq -c '.data.resultData.runData.Leapter[0].data.main[0][0].json'
+	# The CLI prints log lines before the JSON and sometimes after it: only the JSON block, from the
+	# first line that opens it to the first line that closes it
+	sed -n '/^{/,/^}/p' <<<"$output" | jq -c '.data.resultData.runData.Leapter[0].data.main[0][0].json'
 }
 
 # --- Setup ---------------------------------------------------------------------------------
