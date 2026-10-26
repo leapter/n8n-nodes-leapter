@@ -144,7 +144,7 @@ export class LeapterApi implements ICredentialType {
   name = 'leapterApi';
   displayName = 'Leapter API';
   documentationUrl = 'https://github.com/leapter/n8n-nodes-leapter#readme';
-  icon = 'file:leapter.svg' as const;
+  icon = { light: 'file:leapter.svg', dark: 'file:leapter.dark.svg' } as const;
 
   properties: INodeProperties[] = [
     {
