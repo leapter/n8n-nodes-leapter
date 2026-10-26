@@ -55,7 +55,20 @@ services:
     entrypoint: ['tini', '--', 'sh', '-c', 'node /e2e/relay.js & exec /docker-entrypoint.sh']
     ports:
       - '127.0.0.1:${N8N_PORT:-5693}:5678'
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://localhost:5678/healthz/readiness').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      retries: 60
 
+  # Starts once the main process has migrated the database: n8n 2.0 runs the migrations in every
+  # process, and two at once on a fresh database collide
   worker:
     <<: *n8n
     entrypoint: ['tini', '--', 'sh', '-c', 'node /e2e/relay.js & exec /docker-entrypoint.sh worker']
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      n8n:
+        condition: service_healthy

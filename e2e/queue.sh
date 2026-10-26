@@ -18,7 +18,8 @@ Inputs: as e2e/run.sh (CLUSTER_URL, SERVICE_KEY, ENVIRONMENT, APPLICATION, BLUEP
 INPUT_JSON), and ADMIN_KEY: a key that may list an application's keys (the service key may not);
 for a local cluster it is read from genielabs (GENIELABS_DIR, default ~/leapter/genielabs).
 Optional: FRESH_APPLICATION and FRESH_BLUEPRINT_ID (a deployed project without any
-key yet, blueprint without inputs), N8N_VERSION (default 2.44.5), E2E_N8N_PORT (default 5693).
+key yet, blueprint without inputs), N8N_VERSION (default 2.44.5; tested with 2.39.6 and 2.44.5,
+n8n 2.0.3 cannot activate imported workflows from the CLI), E2E_N8N_PORT (default 5693).
 
 For the local cluster: eval "$(bash e2e/prepare-local.sh)" && bash e2e/queue.sh
 EOF
@@ -91,7 +92,7 @@ active_keys() {
 
 revoke() {
 	curl -sf -X POST "$CP/environments/$ENVIRONMENT/applications/$1/keys/$2/revoke" \
-		-H "Authorization: Bearer $SERVICE_KEY" -H 'Content-Type: application/json' \
+		-H "Authorization: Bearer ${ADMIN_KEY:-$SERVICE_KEY}" -H 'Content-Type: application/json' \
 		-d "{\"reason\": \"$3\"}" >/dev/null
 }
 
@@ -102,13 +103,18 @@ cleanup() {
 	[[ -n ${ADMIN_KEY:-} ]] || { compose down -v >/dev/null 2>&1 || true; rm -rf "$WORK"; exit "$status"; }
 	for app in "$APPLICATION" ${FRESH_APPLICATION:-}; do
 		for id in $(active_keys "$app" 2>/dev/null | jq -r '.[]'); do
-			revoke "$app" "$id" 'n8n node queue e2e: cleanup' && echo "cleanup: revoked $app key $id"
+			if revoke "$app" "$id" 'n8n node queue e2e: cleanup'; then
+				echo "cleanup: revoked $app key $id"
+			else
+				echo "cleanup: could not revoke $app key $id; revoke it in the Admin UI"
+			fi
 		done
 	done
 	if [[ -n ${SECOND_KEY_ID:-} ]]; then
 		curl -sf -X POST "$CP/service-accounts/service:env:$ENVIRONMENT:n8n/keys/$SECOND_KEY_ID/revoke" \
 			-H "Authorization: Bearer $ADMIN_KEY" -H 'Content-Type: application/json' \
-			-d '{"reason": "n8n node queue e2e: cleanup"}' >/dev/null && echo "cleanup: revoked service key $SECOND_KEY_ID"
+			-d '{"reason": "n8n node queue e2e: cleanup"}' >/dev/null && echo "cleanup: revoked service key $SECOND_KEY_ID" ||
+			echo "cleanup: could not revoke service key $SECOND_KEY_ID; revoke it in the Admin UI"
 	fi
 	compose down -v >/dev/null 2>&1 || true
 	echo 'cleanup: n8n removed'
@@ -212,8 +218,15 @@ done
 # Active workflows register their webhooks on start
 compose restart n8n >/dev/null 2>&1
 wait_for_n8n
-curl -sf -c "$WORK/cookies" -X POST "$N8N/rest/login" -H 'Content-Type: application/json' \
-	-d "$OWNER_LOGIN" >/dev/null || fail 'setup: owner login failed'
+if ! curl -sf -c "$WORK/cookies" -X POST "$N8N/rest/login" -H 'Content-Type: application/json' \
+	-d "$OWNER_LOGIN" >/dev/null; then
+	# Before n8n 2.x took the owner from the environment (N8N_INSTANCE_OWNER_*), set it up once
+	curl -sf -X POST "$N8N/rest/owner/setup" -H 'Content-Type: application/json' \
+		-d '{"email": "e2e@leapter.test", "firstName": "E2E", "lastName": "Owner", "password": "e2e-Owner-Pass-1"}' \
+		>/dev/null || fail 'setup: owner login failed'
+	curl -sf -c "$WORK/cookies" -X POST "$N8N/rest/login" -H 'Content-Type: application/json' \
+		-d "$OWNER_LOGIN" >/dev/null || fail 'setup: owner login failed'
+fi
 
 # --- Q1 first run on the worker --------------------------------------------------------------
 

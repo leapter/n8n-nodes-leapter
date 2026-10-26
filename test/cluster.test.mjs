@@ -4,7 +4,7 @@ import { test } from 'node:test';
 
 // The compiled build: `pnpm test` runs tsc first
 const require = createRequire(import.meta.url);
-const { describeClusterError } = require('../dist/nodes/Leapter/cluster.js');
+const { describeClusterError, provisionKey } = require('../dist/nodes/Leapter/cluster.js');
 
 test("a blueprint's own error messages are shown, not the exception type", () => {
   // As the runtime answers when a blueprint raises an error (insurance-claim-triage, claimAmount 0)
@@ -34,4 +34,49 @@ test('a refusal does not claim the key was revoked when the environment may be t
   const message = describeClusterError(403, { title: 'Forbidden' }, {});
   assert.match(message, /environment/);
   assert.match(message, /Service accounts → n8n/);
+});
+
+// A context whose credential holds a key for dev/held; the marked request fails with `status`
+function provisionContext(status) {
+  const calls = [];
+  return {
+    calls,
+    async getCredentials() {
+      return {
+        serviceKey: `lk_mgmt_provision_${status}`,
+        clusterUrl: 'http://localhost:3002',
+        evalKeys: JSON.stringify({ 'dev/held': { id: 'id-held', key: 'lk_dev_held', mintedAt: 1 } }),
+      };
+    },
+    helpers: {
+      async httpRequestWithAuthentication(type, options) {
+        calls.push(options);
+        if (status) throw Object.assign(new Error(`status ${status}`), { httpCode: String(status) });
+        return {};
+      },
+    },
+  };
+}
+
+test('a missing key is requested through a project the credential holds a key for', async () => {
+  const ctx = provisionContext(0);
+  await provisionKey(ctx, 'http://localhost:3003', 'dev', 'new');
+  assert.equal(ctx.calls[0].url, 'http://localhost:3003/runtime/api/v1/dev/held/openapi');
+  assert.equal(ctx.calls[0].headers['X-Leapter-Provision'], 'dev/new');
+});
+
+test('401 and 404 while requesting a key are left to the request that follows', async () => {
+  await provisionKey(provisionContext(401), 'http://localhost:3003', 'dev', 'new');
+  await provisionKey(provisionContext(404), 'http://localhost:3003', 'dev', 'new');
+});
+
+test('a refused key creation fails at once instead of waiting a minute', async () => {
+  await assert.rejects(provisionKey(provisionContext(403), 'http://localhost:3003', 'dev', 'new'), /status 403/);
+  await assert.rejects(provisionKey(provisionContext(500), 'http://localhost:3003', 'dev', 'new'), /status 500/);
+});
+
+test('a project with a key needs no request', async () => {
+  const ctx = provisionContext(0);
+  await provisionKey(ctx, 'http://localhost:3003', 'dev', 'held');
+  assert.equal(ctx.calls.length, 0);
 });
