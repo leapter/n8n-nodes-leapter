@@ -25,7 +25,8 @@ Inputs (environment variables, all required):
 Optional: N8N_VERSION (the n8nio/n8n image tag, default 2.44.5), E2E_N8N_PORT (default 5691),
 E2E_KEEP=1 keeps n8n running and the key unrevoked.
 
-For the local cluster (ADMIN_KEY: an admin key of it): eval "$(bash e2e/prepare-local.sh)" && pnpm e2e
+For the local cluster: export ADMIN_KEY=<admin key> APPLICATION=<project> INPUT_JSON='<input>'
+  eval "$(bash e2e/prepare-local.sh)" && pnpm e2e
 EOF
 }
 

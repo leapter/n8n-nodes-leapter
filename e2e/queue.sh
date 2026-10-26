@@ -21,7 +21,7 @@ Optional: FRESH_APPLICATION and FRESH_BLUEPRINT_ID (a deployed project without a
 key yet, blueprint without inputs), N8N_VERSION (default 2.44.5; tested with 2.39.6 and 2.44.5,
 n8n 2.0.3 cannot activate imported workflows from the CLI), E2E_N8N_PORT (default 5693).
 
-For the local cluster: export ADMIN_KEY=<an admin key of the local cluster>
+For the local cluster: export ADMIN_KEY=<admin key> APPLICATION=<project> INPUT_JSON='<input>'
   eval "$(bash e2e/prepare-local.sh)" && bash e2e/queue.sh
 EOF
 }
