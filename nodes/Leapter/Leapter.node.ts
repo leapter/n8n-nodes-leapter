@@ -2,6 +2,8 @@ import type {
   IExecuteFunctions,
   ILoadOptionsFunctions,
   INodeExecutionData,
+  INodeListSearchItems,
+  INodeListSearchResult,
   INodePropertyOptions,
   INodeType,
   INodeTypeDescription,
@@ -148,20 +150,28 @@ export class Leapter implements INodeType {
       },
     ],
     properties: [
-      // 1. Project Dropdown (deployed projects with public blueprints, in every environment the
-      // service key reaches)
+      // 1. Project (deployed projects with public blueprints, in every environment the service key
+      // reaches). A resource locator, not a dropdown: n8n since 2.x asks a dropdown for its options
+      // when the panel opens, on a node's first opening before it has assigned the credential, and
+      // then never again. A resource locator asks when the list is opened, and again after a failure.
       {
-        displayName: 'Project Name or ID',
+        displayName: 'Project',
         name: 'project',
-        type: 'options',
-        typeOptions: {
-          loadOptionsMethod: 'getProjects',
-          loadOptionsDependsOn: [],
-        },
-        default: '',
+        type: 'resourceLocator',
+        default: { mode: 'list', value: '' },
         required: true,
-        noDataExpression: true,
-        description: 'The Leapter project containing your blueprints. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+        description: 'The Leapter project containing your blueprints',
+        modes: [
+          {
+            displayName: 'From List',
+            name: 'list',
+            type: 'list',
+            typeOptions: {
+              searchListMethod: 'searchProjects',
+              searchable: true,
+            },
+          },
+        ],
       },
 
       // 2. Blueprint Dropdown (the project's public blueprints, depends on project)
@@ -171,7 +181,8 @@ export class Leapter implements INodeType {
         type: 'options',
         typeOptions: {
           loadOptionsMethod: 'getOperations',
-          loadOptionsDependsOn: ['project'],
+          // The resource locator's value: n8n compares dependencies as strings
+          loadOptionsDependsOn: ['project.value'],
         },
         default: '',
         required: true,
@@ -249,7 +260,7 @@ export class Leapter implements INodeType {
         },
         required: true,
         typeOptions: {
-          loadOptionsDependsOn: ['project', 'operation'],
+          loadOptionsDependsOn: ['project.value', 'operation'],
           resourceMapper: {
             resourceMapperMethod: 'getOperationFields',
             mode: 'add',
@@ -263,9 +274,11 @@ export class Leapter implements INodeType {
             noFieldsError: 'No input fields to show.',
           },
         },
+        // Only once a blueprint is chosen: without one n8n would show "No input fields to show"
         displayOptions: {
           show: {
             inputMode: ['visual'],
+            operation: [{ _cnd: { exists: true } }],
           },
         },
         description: 'Map input data to operation parameters',
@@ -310,14 +323,15 @@ export class Leapter implements INodeType {
   };
 
   methods = {
-    loadOptions: {
+    listSearch: {
       /**
        * Lists the deployed projects with public blueprints in every environment the service key
        * reaches
        */
-      async getProjects(
+      async searchProjects(
         this: ILoadOptionsFunctions,
-      ): Promise<INodePropertyOptions[]> {
+        filter?: string,
+      ): Promise<INodeListSearchResult> {
         try {
           const clusterUrl = await clusterUrlOf(this);
           const answer = (await this.helpers.httpRequestWithAuthentication.call(
@@ -332,13 +346,13 @@ export class Leapter implements INodeType {
           )) as EnvironmentsAnswer;
           const environments = (answer.environments ?? []).map((environment) => environment.slug);
 
-          const options: INodePropertyOptions[] = [];
+          const results: INodeListSearchItems[] = [];
           for (const environment of environments) {
             for (const application of await getApplications(this, environment)) {
               if (!application.callable?.length) continue;
               // Value format: environment::application; the environment is named only when the
               // key reaches more than one
-              options.push({
+              results.push({
                 name:
                   environments.length === 1
                     ? application.slug
@@ -347,19 +361,26 @@ export class Leapter implements INodeType {
               });
             }
           }
-          return options.sort((a, b) => a.name.localeCompare(b.name));
+          const needle = filter?.trim().toLowerCase();
+          return {
+            results: results
+              .filter((result) => !needle || result.name.toLowerCase().includes(needle))
+              .sort((a, b) => a.name.localeCompare(b.name)),
+          };
         } catch (error) {
           throw clusterError(this, error, 'Failed to load projects');
         }
       },
+    },
 
+    loadOptions: {
       /**
        * Lists the selected project's public blueprints
        */
       async getOperations(
         this: ILoadOptionsFunctions,
       ): Promise<INodePropertyOptions[]> {
-        const projectValue = this.getNodeParameter('project') as string;
+        const projectValue = projectOf(this);
 
         if (!projectValue) {
           return [];
@@ -387,7 +408,7 @@ export class Leapter implements INodeType {
       async getOperationFields(
         this: ILoadOptionsFunctions,
       ): Promise<ResourceMapperFields> {
-        const projectValue = this.getNodeParameter('project') as string;
+        const projectValue = projectOf(this);
         const blueprintId = this.getNodeParameter('operation') as string;
         const [environment, application] = projectValue.split('::');
 
@@ -432,7 +453,7 @@ export class Leapter implements INodeType {
     const executionId = this.getExecutionId();
 
     // Get selected project (same for all items)
-    const projectValue = this.getNodeParameter('project', 0) as string;
+    const projectValue = this.getNodeParameter('project', 0, '', { extractValue: true }) as string;
 
     if (!projectValue) {
       throw new NodeOperationError(
@@ -449,7 +470,7 @@ export class Leapter implements INodeType {
       try {
         // Saved values: project = environment::application, operation = blueprint id
         const [environment, application] = (
-          this.getNodeParameter('project', itemIndex) as string
+          this.getNodeParameter('project', itemIndex, '', { extractValue: true }) as string
         ).split('::');
         const blueprintId = this.getNodeParameter('operation', itemIndex) as string;
         const inputMode = this.getNodeParameter('inputMode', itemIndex) as string;
@@ -646,14 +667,20 @@ async function prewarm(
 }
 
 /**
- * Who asks for the field list: the n8n user and the credential, or undefined when n8n does not
- * say. The user id is not in n8n's node API; n8n 2.44 passes it in the context's additionalData.
+ * The selected project (`environment::application`) in a load-options call, '' when none
+ */
+function projectOf(ctx: ILoadOptionsFunctions): string {
+  return (ctx.getNodeParameter('project', '', { extractValue: true }) as string) ?? '';
+}
+
+/**
+ * Whose field loads supersede each other: the credential's. n8n gives a loader no node, workflow
+ * or user identity (it runs as "Temp-Node"), so two people sharing a credential and loading fields
+ * in the same activation minute could get each other's answer; one person switching blueprints is
+ * the case this is for.
  */
 function fieldLoadCaller(ctx: ILoadOptionsFunctions): string | undefined {
-  const userId = (ctx as unknown as { additionalData?: { userId?: string } }).additionalData
-    ?.userId;
-  const credentialId = ctx.getNode().credentials?.[CREDENTIAL_TYPE]?.id;
-  return userId && credentialId ? `${userId}/${credentialId}` : undefined;
+  return ctx.getNode().credentials?.[CREDENTIAL_TYPE]?.id ?? undefined;
 }
 
 /**

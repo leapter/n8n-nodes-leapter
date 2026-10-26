@@ -55,7 +55,7 @@ Releases are cut from the GitHub Releases UI (draft a release with a `vX.Y.Z` ta
 | Files | PascalCase for nodes/credentials | `Leapter.node.ts` |
 | Classes | PascalCase, implements n8n interface | `class Leapter implements INodeType` |
 | Interfaces | PascalCase with `I` prefix (n8n) or plain (local) | `INodeType`, `OpenAPISpec` |
-| Methods | camelCase | `getProjects`, `getOperations` |
+| Methods | camelCase | `searchProjects`, `getOperations` |
 | Constants | SCREAMING_SNAKE_CASE | `CREDENTIAL_TYPE` |
 | Properties | camelCase | `displayName`, `operationId` |
 
@@ -64,7 +64,7 @@ Releases are cut from the GitHub Releases UI (draft a release with a `vX.Y.Z` ta
 ### n8n Node Development
 - Nodes implement `INodeType` with `description` and `execute()` method
 - Credentials implement `ICredentialType` with `authenticate` block
-- Use `loadOptions` methods for dynamic dropdowns
+- Use `loadOptions` methods for dynamic dropdowns, `listSearch` methods for resource locators
 - Use `resourceMapper` for dynamic input field generation
 - Access credentials via `this.helpers.httpRequestWithAuthentication()`
 - Return `INodeExecutionData[][]` from execute (array of arrays for multiple outputs)
@@ -92,10 +92,12 @@ User selects project (GET {cp}/environments, then GET {cp}/environments/{env}/st
 `{cp}` is `{clusterUrl}/runtime-management`. `{runBase}` is read once per execution by `readRunBase()` (`nodes/Leapter/cluster.ts`).
 
 ### Saved Parameter Values
-- **Project**: `environment::application` (application slug)
+- **Project**: a resource locator (list mode only): `{ __rl: true, mode: 'list', value: 'environment::application' }` (application slug); read with `{ extractValue: true }` (`projectOf()` in load-options methods)
 - **Operation**: the blueprint id from `status` (`callable[].id`)
 
 Parsed via array destructuring: `const [environment, application] = project.split('::')`
+
+Project is a resource locator, not an `options` dropdown: n8n 2.39+ (not 2.0.3) asks a dropdown for its options when the panel opens, and on the first node of an editor page that is before it has assigned the existing credential; the reload the assignment triggers is dropped while that first request runs (`ParameterInput.vue`), so the list stayed "Error fetching options". A resource locator asks when its list is opened (`searchProjects`, `methods.listSearch`) and again after a failure.
 
 ### Runtime Cluster Endpoints
 - `GET {cp}/environments` - Environments the service key may reach (also the credential test)
@@ -121,11 +123,11 @@ All requests use `disableFollowRedirect: true`; `assertHttps()` refuses non-http
 ## Key Implementation Details
 
 - **Only the POST `/models/{id}/runs` path** of the OpenAPI document is read, for the selected blueprint id; the document's `servers` are never used
-- **resourceMapper** generates dynamic fields from OpenAPI schema properties. n8n (2.0 to 2.44.5) does not show errors thrown by `getOperationFields`, nor `emptyFieldsNotice` while a list loads, so:
+- **resourceMapper** generates dynamic fields from OpenAPI schema properties. It is shown only once a blueprint is chosen (without one n8n shows "No input fields to show"). n8n (2.0 to 2.44.5) does not show errors thrown by `getOperationFields`, nor `emptyFieldsNotice` while a list loads, so:
   - `activationNotice` (type `notice`, above the resource mapper) explains the wait. Shown when a project is set in Visual Mapping, hidden once `/parameters.schema` has entries (displayOptions read the path with lodash `get`). Paths into a parameter start with `/` (from the node's root): n8n before 2.40 cannot order a dependency named `parameters.schema` and fails every run with "Could not resolve parameter dependencies".
   - `getOperationFields` waits for an activating key itself (10 s × 6). Only then does it return `emptyFieldsNotice` (with n8n's Retry) as the fallback.
   - A blueprint without inputs gets one hidden placeholder field `__leapter_no_inputs` (`display: false`). n8n ignores a hide rule on an empty list, so without it the activation notice would stay. `noInputsNotice` shows when `/parameters.schema[0].id` is the placeholder; `execute` sends only `body.` fields, so the placeholder is never sent.
-  - n8n never cancels a field request; the editor ends its loading state with the first answer and keeps the last. So all field loads of one caller (the n8n user and the credential, `fieldLoadCaller()`) go through `newestLoad()`: a superseded load stops its retries and answers with the newest load's result. n8n gives a loader no node or workflow identity (it runs as "Temp-Node"), and the user id is read from the context's `additionalData`, which is not node API; without it every load answers for itself.
+  - n8n never cancels a field request; the editor ends its loading state with the first answer and keeps the last. So all field loads of one credential (`fieldLoadCaller()`) go through `newestLoad()`: a superseded load stops its retries and answers with the newest load's result. n8n gives a loader no node, workflow or user identity (it runs as "Temp-Node"); two people sharing a credential and loading fields in the same activation minute could get each other's answer.
   - Before waiting, `getOperationFields` checks that the blueprint is one of the project's (`/status`): after a project switch n8n asks once with the old blueprint, and that answers an empty list at once.
   - `getOperations` pre-warms the project's key: one engine request through the credential, not awaited, so a missing key is created while the user picks the blueprint.
 - **Credential**: `clusterUrl` (display name "Leapter Server") is shown only under `showAdvanced`; its default is `https://runtime.leapter.com`

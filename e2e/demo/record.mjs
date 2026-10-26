@@ -347,8 +347,14 @@ async function record(browser, labState, serviceKey) {
 		await ndv.waitFor();
 		await sleep(1_000);
 		const pick = async (parameter, name) => {
-			await page.locator(N(`parameter-input-${parameter}`)).click();
-			const option = page.locator('.el-select-dropdown__item:visible').filter({ hasText: name }).first();
+			// Project is a resource locator (its list opens on a click), Blueprint a dropdown
+			const locator = page.locator(N(`resource-locator-${parameter}`));
+			const rl = (await locator.count()) > 0;
+			await (rl ? locator.locator(N('rlc-input')) : page.locator(N(`parameter-input-${parameter}`))).click();
+			const option = page
+				.locator(rl ? `${N('rlc-item')}:visible` : '.el-select-dropdown__item:visible')
+				.filter({ hasText: name })
+				.first();
 			await option.waitFor({ timeout: 30_000 });
 			await sleep(700);
 			await option.click();
@@ -610,16 +616,16 @@ async function main() {
 // Revokes the evaluation keys the n8n credential created and the service key, removes n8n
 async function cleanUp(adminKey, service) {
 	try {
-		const login = await fetch(`${N8N}/rest/login`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(N8N_OWNER),
-		});
-		const cookie = login.headers.get('set-cookie')?.split(';')[0] ?? '';
-		const credentials = await (await fetch(`${N8N}/rest/credentials`, { headers: { cookie } })).json();
-		for (const { id } of credentials.data ?? []) {
-			const detail = await (await fetch(`${N8N}/rest/credentials/${id}?includeData=true`, { headers: { cookie } })).json();
-			const keys = detail.data?.data?.evalKeys ? JSON.parse(detail.data.data.evalKeys) : {};
+		// The REST API redacts evalKeys like every password field; the CLI exports them decrypted
+		const exported = execFileSync(
+			'docker',
+			['compose', '-f', join(ROOT, 'e2e/docker-compose.yml'), 'exec', '-T', 'n8n', 'n8n', 'export:credentials', '--all', '--decrypted'],
+			{ env: { ...process.env, N8N_PORT }, stdio: ['ignore', 'pipe', 'ignore'] },
+		).toString();
+		const credentials = JSON.parse(exported.slice(exported.indexOf('[')));
+		for (const { type, data } of credentials) {
+			if (type !== 'leapterApi') continue;
+			const keys = data?.evalKeys ? JSON.parse(data.evalKeys) : {};
 			for (const [project, entry] of Object.entries(keys)) {
 				const [environment, application] = project.split('/');
 				await controlPlane(

@@ -151,7 +151,7 @@ load_fields() {
 		-d "$(jq -nc --arg project "$ENVIRONMENT::$APPLICATION" --arg blueprint "$1" --arg credential "$FIELDS_CREDENTIAL_ID" \
 			'{nodeTypeAndVersion: {name: "CUSTOM.leapter", version: 1}, path: "parameters",
 				methodName: "getOperationFields",
-				currentNodeParameters: {project: $project, operation: $blueprint, inputMode: "visual",
+				currentNodeParameters: {project: {__rl: true, mode: "list", value: $project}, operation: $blueprint, inputMode: "visual",
 					parameters: {mappingMode: "defineBelow", value: null}},
 				credentials: {leapterApi: {id: $credential, name: "Leapter e2e fields"}}}')"
 }
@@ -184,7 +184,7 @@ jq -n --arg id "$CREDENTIAL_ID" --arg fields "$FIELDS_CREDENTIAL_ID" --arg url "
 		{id: $fields, name: "Leapter e2e fields", type: "leapterApi", data: {serviceKey: $key, showAdvanced: true, clusterUrl: $url}}]' \
 	>"$WORK/credential.json"
 jq --arg env "$ENVIRONMENT" --arg app "$APPLICATION" --arg id "$BLUEPRINT_ID" --arg input "$INPUT_JSON" \
-	'.nodes[1].parameters += {project: "\($env)::\($app)", operation: $id, parametersJson: $input}' \
+	'.nodes[1].parameters += {project: {__rl: true, mode: "list", value: "\($env)::\($app)"}, operation: $id, parametersJson: $input}' \
 	"$HERE/workflow.json" >"$WORK/workflow.json"
 compose exec -T n8n sh -c 'cat > /tmp/credential.json && n8n import:credentials --input=/tmp/credential.json' \
 	<"$WORK/credential.json" >/dev/null 2>&1 || fail 'setup: n8n import:credentials failed'
