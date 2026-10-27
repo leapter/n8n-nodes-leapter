@@ -110,7 +110,7 @@ async function provisionOAuthKey(
       }
       const cluster = clusterBaseUrl(credentials.clusterUrl);
       assertHttps(ctx, cluster);
-      const answer = (await plainRequest(ctx, {
+      const answer = (await oauthManagementRequest(ctx, {
         method: 'POST',
         url: `${cluster}/runtime-management/environments/${environment}/applications/${application}/keys`,
         headers: { Authorization: `Bearer ${String(token.id_token)}` },
@@ -169,10 +169,38 @@ export async function controlPlaneRequest(
         : SIGN_IN_REQUIRED,
     );
   }
-  return await plainRequest(ctx, {
+  return await oauthManagementRequest(ctx, {
     ...options,
     headers: { ...withoutAuth(options.headers), Authorization: `Bearer ${String(token.id_token)}` },
   });
+}
+
+/** Management failures cannot become engine activation retries, even for 401 or 404. */
+async function oauthManagementRequest(
+  ctx: Context,
+  options: IHttpRequestOptions,
+): Promise<unknown> {
+  try {
+    return await plainRequest(ctx, options);
+  } catch (error) {
+    const answer = answerOf(error);
+    let message: string;
+    if (answer?.status === 401) {
+      message =
+        'The cluster rejected the Leapter sign-in. Open the credential and reconnect. For a custom installation, check Sign-in Server and Client ID under Advanced Settings.';
+    } else if (answer?.status === 403) {
+      message =
+        'The cluster refused the signed-in account. Check its access to this environment; creating project access keys requires the operator role.';
+    } else if (answer?.status === 404) {
+      message =
+        'The cluster could not find the requested environment, project or management endpoint. Check the selected project and Leapter Server under Advanced Settings.';
+    } else {
+      message = answer
+        ? describeClusterError(answer.status, answer.body, answer.headers)
+        : `Leapter management request failed: ${(error as Error).message}`;
+    }
+    throw new NodeOperationError(ctx.getNode(), message);
+  }
 }
 
 /** Engine requests carry only a project's evaluation key, even after the sign-in expires. */
@@ -232,7 +260,7 @@ export async function runBaseOf(ctx: Context): Promise<string> {
  * address than its Leapter Server (a local cluster, on http://localhost:3003)
  */
 export const RUN_ADDRESS_MISSING =
-  'This cluster answers runs on another address than the Leapter Server. Set Run Address in the Leapter credential (Advanced Settings for Service Account Key, Custom for OAuth2).';
+  'This cluster answers runs on another address than the Leapter Server. Set Run Address under Advanced Settings in the Leapter credential.';
 
 /**
  * Whether an engine request was answered by the control plane, which knows no engine paths. An

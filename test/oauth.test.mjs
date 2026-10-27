@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { test } from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { Expression, NodeHelpers, Workflow } = require('n8n-workflow');
+const { Expression, NodeApiError, NodeHelpers, NodeOperationError, Workflow } = require('n8n-workflow');
 const { LeapterOAuth2Api } = require('../dist/credentials/LeapterOAuth2Api.credentials.js');
 const { idTokenUsable, oauthKeys, oauthKeyState } = require('../dist/credentials/oauth-keys.js');
 const { credentialTypeOf, controlPlaneRequest, engineRequest, provisionKey } = require('../dist/nodes/Leapter/cluster.js');
@@ -257,6 +257,63 @@ test('a refused mint leaves the queue usable and is not treated as a saved key',
   assert.deepEqual(oauthKeys(ctx.credentials), {});
   await provisionKey(ctx, 'https://run.example', 'test', 'app');
   assert.equal(ctx.saved.length, 1);
+});
+
+for (const [status, expected] of [
+  [401, /cluster rejected the Leapter sign-in.*reconnect/],
+  [404, /could not find the requested environment, project or management endpoint/],
+  [403, /signed-in account.*operator role/],
+  [500, /Request failed with status 500/],
+  [undefined, /offline/],
+]) {
+  test(`key creation failure (${status ?? 'network'}) is not retried by runs or field loads`, { timeout: 1500 }, async () => {
+    for (const method of [node.execute, node.methods.resourceMapping.getOperationFields]) {
+      const ctx = context(data(), { answer: ({ url }) => {
+        if (url.endsWith('/status')) {
+          return { environments: [{ applications: [{ slug: 'app', callable: [{ id: 'blueprint' }] }] }] };
+        }
+        assert.ok(url.endsWith('/keys'), 'no engine call before a key is created');
+        throw Object.assign(new Error('offline'), status ? { response: { status, data: {}, headers: {} } } : {});
+      } });
+      await assert.rejects(method.call(ctx), expected);
+      assert.equal(ctx.calls.filter(({ url }) => url.endsWith('/keys')).length, 1);
+      assert.deepEqual(ctx.saved, []);
+    }
+  });
+}
+
+test('management 401s ask to reconnect for project and blueprint lists, including with a saved key', async () => {
+  for (const method of [node.methods.listSearch.searchProjects, node.methods.loadOptions.getOperations]) {
+    const ctx = context(data({ keys: { 'test/app': key('app') } }), { answer: () => {
+      throw Object.assign(new Error('Unauthorized'), { response: { status: 401 } });
+    } });
+    await assert.rejects(method.call(ctx), (error) => {
+      assert.match(error.message, /cluster rejected the Leapter sign-in.*reconnect/);
+      assert.doesNotMatch(error.message, /activat|minute|revoked/);
+      return true;
+    });
+    // Blueprint discovery may also prewarm the engine with the already stored key.
+    assert.equal(ctx.calls.filter(({ url }) => url.includes('/runtime-management/')).length, 1);
+    assert.deepEqual(ctx.saved, []);
+  }
+});
+
+test('only management failures become non-retryable: engine 401 and 404 retain activation status', async () => {
+  for (const status of [401, 404]) {
+    const ctx = context(data({ keys: { 'test/app': key('app') } }), { answer: () => {
+      throw Object.assign(new Error('Not active'), { response: { status } });
+    } });
+    await assert.rejects(controlPlaneRequest(ctx, management), (error) => {
+      assert.ok(error instanceof NodeOperationError);
+      assert.equal(error.httpCode, undefined);
+      return true;
+    });
+    await assert.rejects(engineRequest(ctx, 'test', 'app', engine), (error) => {
+      assert.ok(error instanceof NodeApiError);
+      assert.equal(error.httpCode, String(status));
+      return true;
+    });
+  }
 });
 
 test('in-memory keys are isolated by sign-in and cluster, and stored keys are cluster-bound', async () => {
