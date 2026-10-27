@@ -31,12 +31,12 @@ export class LeapterOAuth2Api implements ICredentialType {
 			default: '',
 		},
 		{
-			displayName: 'Use Custom Server',
+			displayName: 'Advanced Settings',
 			name: 'showAdvanced',
 			type: 'boolean',
 			default: false,
 			description:
-				'Whether to connect to another Leapter installation. Turning this off uses hosted Leapter and resets custom settings when saved.',
+				'Whether to configure server and sign-in settings for another Leapter installation. Turning this off resets them to hosted Leapter when saved.',
 		},
 		{
 			displayName: 'Leapter Server',
