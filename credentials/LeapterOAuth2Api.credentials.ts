@@ -25,7 +25,7 @@ export class LeapterOAuth2Api implements ICredentialType {
 	properties: INodeProperties[] = [
 		{
 			displayName:
-				'Sign-in works only on n8n installs registered with Leapter. To register yours, send Leapter the OAuth Redirect URL above, or use Service Account Key instead.',
+				'For Leapter SaaS, send Leapter the OAuth Redirect URL above to enable sign-in. For self-hosted Leapter, ask your administrator to register this URL with your sign-in server. Alternatively, use Service Account Key.',
 			name: 'registrationNotice',
 			type: 'notice',
 			default: '',
