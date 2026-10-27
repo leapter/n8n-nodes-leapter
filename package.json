@@ -29,7 +29,7 @@
 		"dev": "n8n-node dev",
 		"lint": "n8n-node lint",
 		"lint:fix": "n8n-node lint --fix",
-		"test": "tsc && node --test test/",
+		"test": "tsc && node --test test/*.test.mjs",
 		"e2e": "bash e2e/run.sh",
 		"e2e:queue": "bash e2e/queue.sh",
 		"check:public": "bash scripts/check-public.sh",
