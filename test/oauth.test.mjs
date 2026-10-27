@@ -71,9 +71,11 @@ function context(credentials = data(), { authentication = 'oAuth2', answer, refr
 const management = { method: 'GET', url: 'https://cluster.example/runtime-management/environments' };
 const engine = { method: 'GET', url: 'https://run.example/runtime/api/v1/test/app/openapi' };
 
-test('Production derives the public CLI client and hosted cluster, including when stage is omitted', () => {
-  assert.equal(property('stage').default, 'production');
-  for (const fields of [{}, { stage: 'production', customClusterUrl: 'https://ignored.example' }]) {
+test('sign-in defaults to the public CLI client and hosted cluster without advanced settings', () => {
+  assert.equal(property('stage'), undefined);
+  assert.equal(property('showAdvanced').default, false);
+  const defaults = Object.fromEntries(credential.properties.map(({ name, default: value }) => [name, value]));
+  for (const fields of [{}, defaults]) {
     assert.equal(derive('clusterUrl', fields), 'https://runtime.leapter.com');
     assert.equal(derive('runUrl', fields), '');
     assert.equal(derive('clientId', fields), '27429955-4cf8-4cfe-bcc7-fc2fb57989d6');
@@ -82,18 +84,21 @@ test('Production derives the public CLI client and hosted cluster, including whe
   }
 });
 
-test('Custom derives all addresses and client id from its four fields', () => {
+test('advanced settings override all addresses and client id even when the fields are hidden', () => {
   const fields = {
-    stage: 'custom', customClusterUrl: 'https://cluster.example', customRunUrl: 'https://run.example',
+    customClusterUrl: 'https://cluster.example', customRunUrl: 'https://run.example',
     customSignInServer: ' https://identity.example/auth/v1/ ', customClientId: ' custom-client ',
   };
-  assert.equal(derive('clusterUrl', fields), fields.customClusterUrl);
-  assert.equal(derive('runUrl', fields), fields.customRunUrl);
-  assert.equal(derive('clientId', fields), 'custom-client');
-  assert.equal(derive('authUrl', fields), 'https://identity.example/auth/v1/oauth/authorize');
-  assert.equal(derive('accessTokenUrl', fields), 'https://identity.example/auth/v1/oauth/token');
+  for (const showAdvanced of [undefined, false, true]) {
+    const values = { ...fields, showAdvanced };
+    assert.equal(derive('clusterUrl', values), fields.customClusterUrl);
+    assert.equal(derive('runUrl', values), fields.customRunUrl);
+    assert.equal(derive('clientId', values), 'custom-client');
+    assert.equal(derive('authUrl', values), 'https://identity.example/auth/v1/oauth/authorize');
+    assert.equal(derive('accessTokenUrl', values), 'https://identity.example/auth/v1/oauth/token');
+  }
   assert.equal(derive('runUrl', { ...fields, customRunUrl: undefined }), '');
-  const customFields = credential.properties.filter((entry) => entry.displayOptions?.show?.stage?.includes('custom'));
+  const customFields = credential.properties.filter((entry) => entry.displayOptions?.show?.showAdvanced?.includes(true));
   assert.equal(customFields.length, 4);
 });
 

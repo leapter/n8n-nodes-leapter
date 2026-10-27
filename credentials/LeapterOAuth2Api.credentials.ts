@@ -11,9 +11,7 @@ import { oauthKeys, tokenData } from './oauth-keys';
 // Public values published by the hosted cluster's runtime-management/ui/config.json.
 const SIGN_IN_SERVER = 'https://yyahhgbxjvmqtdbgqgiy.supabase.co/auth/v1';
 const CLIENT_ID = '27429955-4cf8-4cfe-bcc7-fc2fb57989d6';
-const stageValue = (production: string, custom: string) =>
-	`={{ $self["stage"] === "custom" ? ${custom} : "${production}" }}`;
-const customServer = '($self["customSignInServer"] || "").trim().replace(/\\/+$/, "")';
+const signInServer = `($self["customSignInServer"] || "${SIGN_IN_SERVER}").trim().replace(/\\/+$/, "")`;
 
 export class LeapterOAuth2Api implements ICredentialType {
 	name = 'leapterOAuth2Api';
@@ -31,22 +29,20 @@ export class LeapterOAuth2Api implements ICredentialType {
 			default: '',
 		},
 		{
-			displayName: 'Stage',
-			name: 'stage',
-			type: 'options',
-			options: [
-				{ name: 'Production', value: 'production' },
-				{ name: 'Custom', value: 'custom' },
-			],
-			default: 'production',
+			displayName: 'Advanced Settings',
+			name: 'showAdvanced',
+			type: 'boolean',
+			default: false,
+			description: 'Whether to show server and sign-in settings for self-hosted clusters or development',
 		},
 		{
 			displayName: 'Leapter Server',
 			name: 'customClusterUrl',
 			type: 'string',
-			default: '',
+			default: DEFAULT_CLUSTER_URL,
 			required: true,
-			displayOptions: { show: { stage: ['custom'] } },
+			description: 'The Leapter Runtime Cluster. Only change for self-hosted clusters or development.',
+			displayOptions: { show: { showAdvanced: [true] } },
 		},
 		{
 			displayName: 'Run Address',
@@ -54,46 +50,46 @@ export class LeapterOAuth2Api implements ICredentialType {
 			type: 'string',
 			default: '',
 			placeholder: 'Same as the Leapter Server',
-			displayOptions: { show: { stage: ['custom'] } },
+			description: 'Where the cluster answers blueprint runs. Leave empty to use the Leapter Server.',
+			displayOptions: { show: { showAdvanced: [true] } },
 		},
 		{
 			displayName: 'Sign-in Server',
 			name: 'customSignInServer',
 			type: 'string',
-			default: '',
+			default: SIGN_IN_SERVER,
 			required: true,
+			description: 'The identity provider used to sign in to this cluster',
 			hint: 'Copy Sign-in Server and Client ID from cliOidc in &lt;Leapter Server&gt;/runtime-management/ui/config.json.',
-			displayOptions: { show: { stage: ['custom'] } },
+			displayOptions: { show: { showAdvanced: [true] } },
 		},
 		{
 			displayName: 'Client ID',
 			name: 'customClientId',
 			type: 'string',
-			default: '',
+			default: CLIENT_ID,
 			required: true,
-			displayOptions: { show: { stage: ['custom'] } },
+			description: 'The public OAuth client identifier for this cluster',
+			displayOptions: { show: { showAdvanced: [true] } },
 		},
 		{ displayName: 'Grant Type', name: 'grantType', type: 'hidden', default: 'pkce' },
 		{
 			displayName: 'Authorization URL',
 			name: 'authUrl',
 			type: 'hidden',
-			default: stageValue(
-				`${SIGN_IN_SERVER}/oauth/authorize`,
-				`${customServer} + "/oauth/authorize"`,
-			),
+			default: `={{ ${signInServer} + "/oauth/authorize" }}`,
 		},
 		{
 			displayName: 'Access Token URL',
 			name: 'accessTokenUrl',
 			type: 'hidden',
-			default: stageValue(`${SIGN_IN_SERVER}/oauth/token`, `${customServer} + "/oauth/token"`),
+			default: `={{ ${signInServer} + "/oauth/token" }}`,
 		},
 		{
 			displayName: 'Client ID',
 			name: 'clientId',
 			type: 'hidden',
-			default: stageValue(CLIENT_ID, '($self["customClientId"] || "").trim()'),
+			default: `={{ ($self["customClientId"] || "${CLIENT_ID}").trim() }}`,
 		},
 		{
 			displayName: 'Client Secret',
@@ -114,13 +110,13 @@ export class LeapterOAuth2Api implements ICredentialType {
 			displayName: 'Leapter Server',
 			name: 'clusterUrl',
 			type: 'hidden',
-			default: stageValue(DEFAULT_CLUSTER_URL, '$self["customClusterUrl"]'),
+			default: `={{ $self["customClusterUrl"] || "${DEFAULT_CLUSTER_URL}" }}`,
 		},
 		{
 			displayName: 'Run Address',
 			name: 'runUrl',
 			type: 'hidden',
-			default: stageValue('', '$self["customRunUrl"] || ""'),
+			default: '={{ $self["customRunUrl"] || "" }}',
 		},
 	];
 
