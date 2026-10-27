@@ -71,14 +71,14 @@ function context(credentials = data(), { authentication = 'oAuth2', answer, refr
 const management = { method: 'GET', url: 'https://cluster.example/runtime-management/environments' };
 const engine = { method: 'GET', url: 'https://run.example/runtime/api/v1/test/app/openapi' };
 
-test('sign-in defaults to the public CLI client and hosted cluster', () => {
+test('sign-in defaults to the public n8n client and hosted cluster', () => {
   assert.equal(property('stage'), undefined);
   assert.equal(property('showAdvanced').default, false);
   const defaults = Object.fromEntries(credential.properties.map(({ name, default: value }) => [name, value]));
   for (const fields of [{}, defaults]) {
     assert.equal(derive('clusterUrl', fields), 'https://runtime.leapter.com');
     assert.equal(derive('runUrl', fields), '');
-    assert.equal(derive('clientId', fields), '27429955-4cf8-4cfe-bcc7-fc2fb57989d6');
+    assert.equal(derive('clientId', fields), 'e97ead56-420a-4298-8784-ff4775034c7c');
     assert.equal(derive('authUrl', fields), 'https://yyahhgbxjvmqtdbgqgiy.supabase.co/auth/v1/oauth/authorize');
     assert.equal(derive('accessTokenUrl', fields), 'https://yyahhgbxjvmqtdbgqgiy.supabase.co/auth/v1/oauth/token');
   }
