@@ -20,6 +20,9 @@ import {
   answerOf,
   clusterError,
   clusterUrlOf,
+  credentialTypeOf,
+  controlPlaneRequest,
+  engineRequest,
   isControlPlaneAnswer,
   provisionKey,
   runBaseOf,
@@ -108,11 +111,6 @@ interface StatusAnswer {
 }
 
 /**
- * Credential type name for Leapter API Key
- */
-const CREDENTIAL_TYPE = 'leapterApi';
-
-/**
  * While a project's new key or deploy activates (401 or 404, up to a minute), the field list and
  * a run ask again every 10 s, at most 6 times after the first request: 7 requests over 60 s
  */
@@ -149,9 +147,26 @@ export class Leapter implements INodeType {
       {
         name: 'leapterApi',
         required: true,
+        displayOptions: { show: { authentication: ['serviceAccountKey'] } },
+      },
+      {
+        name: 'leapterOAuth2Api',
+        required: true,
+        displayOptions: { show: { authentication: ['oAuth2'] } },
       },
     ],
     properties: [
+      {
+        displayName: 'Authentication',
+        name: 'authentication',
+        type: 'options',
+        noDataExpression: true,
+        options: [
+          { name: 'Service Account Key', value: 'serviceAccountKey' },
+          { name: 'OAuth2', value: 'oAuth2' },
+        ],
+        default: 'serviceAccountKey',
+      },
       // 1. Project (deployed projects with public blueprints, in every environment the service key
       // reaches). A resource locator, not a dropdown: n8n since 2.x asks a dropdown for its options
       // when the panel opens, on a node's first opening before it has assigned the credential, and
@@ -340,16 +355,12 @@ export class Leapter implements INodeType {
       ): Promise<INodeListSearchResult> {
         try {
           const clusterUrl = await clusterUrlOf(this);
-          const answer = (await this.helpers.httpRequestWithAuthentication.call(
-            this,
-            CREDENTIAL_TYPE,
-            {
-              method: 'GET',
-              url: `${clusterUrl}/runtime-management/environments`,
-              json: true,
-              disableFollowRedirect: true,
-            },
-          )) as EnvironmentsAnswer;
+          const answer = (await controlPlaneRequest(this, {
+            method: 'GET',
+            url: `${clusterUrl}/runtime-management/environments`,
+            json: true,
+            disableFollowRedirect: true,
+          })) as EnvironmentsAnswer;
           const environments = (answer.environments ?? []).map((environment) => environment.slug);
 
           const results: INodeListSearchItems[] = [];
@@ -430,6 +441,9 @@ export class Leapter implements INodeType {
           try {
             callable = await callableBlueprints(this, environment, application);
           } catch (error) {
+            if (error instanceof NodeOperationError) {
+              return { fields: [], emptyFieldsNotice: error.message };
+            }
             throw clusterError(this, error, 'Failed to load the blueprint fields');
           }
           if (!callable.some((blueprint) => blueprint.id === blueprintId)) {
@@ -533,11 +547,12 @@ export class Leapter implements INodeType {
         for (let retries = 0; ; retries++) {
           try {
             await provisionKey(this, runBase, environment, application);
-            response = await this.helpers.httpRequestWithAuthentication.call(
+            response = (await engineRequest(
               this,
-              CREDENTIAL_TYPE,
+              environment,
+              application,
               requestOptions,
-            );
+            )) as typeof response;
             if (retries > 0) {
               const waited = Math.round((Date.now() - firstAttempt) / 1000);
               this.addExecutionHints({
@@ -632,7 +647,7 @@ async function getApplications(
   environment: string,
 ): Promise<StatusAnswer['environments'][number]['applications']> {
   const clusterUrl = await clusterUrlOf(ctx);
-  const answer = (await ctx.helpers.httpRequestWithAuthentication.call(ctx, CREDENTIAL_TYPE, {
+  const answer = (await controlPlaneRequest(ctx, {
     method: 'GET',
     url: `${clusterUrl}/runtime-management/environments/${environment}/status`,
     json: true,
@@ -654,7 +669,7 @@ async function prewarm(
   try {
     const runBase = await runBaseOf(ctx);
     await provisionKey(ctx, runBase, environment, application);
-    await ctx.helpers.httpRequestWithAuthentication.call(ctx, CREDENTIAL_TYPE, {
+    await engineRequest(ctx, environment, application, {
       method: 'GET',
       url: `${runBase}/runtime/api/v1/${environment}/${application}/openapi`,
       json: true,
@@ -716,7 +731,7 @@ function splitProject(value: unknown): [string, string] | undefined {
  * the case this is for.
  */
 function fieldLoadCaller(ctx: ILoadOptionsFunctions): string | undefined {
-  return ctx.getNode().credentials?.[CREDENTIAL_TYPE]?.id ?? undefined;
+  return ctx.getNode().credentials?.[credentialTypeOf(ctx)]?.id ?? undefined;
 }
 
 /**
@@ -837,13 +852,16 @@ async function getOpenApiSpec(
   for (let retries = 0; ; retries++) {
     try {
       await provisionKey(ctx, runBase, environment, application);
-      return (await ctx.helpers.httpRequestWithAuthentication.call(ctx, CREDENTIAL_TYPE, {
+      return (await engineRequest(ctx, environment, application, {
         method: 'GET',
         url: `${runBase}/runtime/api/v1/${environment}/${application}/openapi`,
         json: true,
         disableFollowRedirect: true,
       })) as OpenAPISpec;
     } catch (error) {
+      if (error instanceof NodeOperationError) {
+        return error.message;
+      }
       if (isControlPlaneAnswer(error)) {
         return RUN_ADDRESS_MISSING;
       }

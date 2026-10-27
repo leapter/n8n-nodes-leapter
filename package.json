@@ -42,7 +42,8 @@
 		"n8nNodesApiVersion": 1,
 		"strict": true,
 		"credentials": [
-			"dist/credentials/LeapterApi.credentials.js"
+			"dist/credentials/LeapterApi.credentials.js",
+			"dist/credentials/LeapterOAuth2Api.credentials.js"
 		],
 		"nodes": [
 			"dist/nodes/Leapter/Leapter.node.js"
