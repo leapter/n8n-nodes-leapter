@@ -15,6 +15,8 @@ import { idTokenUsable, oauthKeys, oauthKeyState, tokenData } from '../../creden
 
 type Context = IExecuteFunctions | ILoadOptionsFunctions;
 
+const SIGN_IN_REQUIRED = 'The Leapter credential is not connected. Open the credential and connect.';
+
 /** Read the saved option directly: older workflows have no authentication parameter. */
 export function credentialTypeOf(ctx: Context): 'leapterApi' | 'leapterOAuth2Api' {
   return ctx.getNode().parameters.authentication === 'oAuth2' ? 'leapterOAuth2Api' : 'leapterApi';
@@ -101,7 +103,9 @@ async function provisionOAuthKey(
       if (!idTokenUsable(token)) {
         throw new NodeOperationError(
           ctx.getNode(),
-          `Access to ${application} needs a new sign-in: the Leapter sign-in is older than an hour. Open the credential and reconnect.`,
+          token.id_token
+            ? `Access to ${application} needs a new sign-in: the Leapter sign-in is older than an hour. Open the credential and reconnect.`
+            : SIGN_IN_REQUIRED,
         );
       }
       const cluster = clusterBaseUrl(credentials.clusterUrl);
@@ -160,7 +164,9 @@ export async function controlPlaneRequest(
   if (!idTokenUsable(token)) {
     throw new NodeOperationError(
       ctx.getNode(),
-      'The Leapter sign-in is older than an hour, so projects and blueprints cannot be listed. Open the credential and reconnect. Runs keep working.',
+      token.id_token
+        ? 'The Leapter sign-in is older than an hour, so projects and blueprints cannot be listed. Open the credential and reconnect. Runs keep working.'
+        : SIGN_IN_REQUIRED,
     );
   }
   return await plainRequest(ctx, {

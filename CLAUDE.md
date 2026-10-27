@@ -119,6 +119,7 @@ All requests use `disableFollowRedirect: true`; `assertHttps()` refuses non-http
 - OAuth2 keys live in encrypted `oauthTokenData.leapter_eval_keys`. `provisionKey()` creates missing keys, then immediately calls `refreshOAuth2Token()`. The credential's `preAuthentication` only carries stored and in-memory keys into token data. n8n 2.27+ merges this during refresh and saves it. There is no `evalKeys` field or `authenticate` on this credential. Access and refresh tokens stay intact.
 - Sign-in state is scoped by cluster and id token; provisioning and saving are queued within a process. Keys record their cluster, as service-key entries do. A failed save is reported and retried without minting another key.
 - The id token's `exp`, with a 60 s margin, gates lists and new-key creation. Refresh does not renew it. Expired sign-ins require Reconnect for those operations, with no request sent for a missing key. Stored-key runs remain one request, even after expiry or restart. Reconnect preserves stored keys.
+- n8n's Disconnect action deletes all `oauthTokenData`, including evaluation keys. Missing sign-ins get a connect message, not the expiry message; no request is sent. Signing in after Disconnect creates new keys on first use. Disconnect does not revoke the old keys at the cluster.
 
 The remaining key-handling details apply to the service-key credential:
 - The credential holds a key of the cluster's `n8n` service account (`serviceKey`, `lk_mgmt_…`). The control plane takes it; the engines take only per-project evaluation keys.

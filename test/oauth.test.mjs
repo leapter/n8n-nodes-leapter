@@ -184,6 +184,20 @@ test('an expired sign-in without a project key fails before any request or refre
   assert.deepEqual(ctx.saved, []);
 });
 
+test('disconnect clears access to stored and cached keys and asks to connect without sending requests', async () => {
+  const credentials = data({ keys: { 'test/app': key('stored') } });
+  oauthKeyState(credentials).latest['test/app'] = key('cached');
+  // n8n's Disconnect action deletes the entire OAuth token-data block.
+  delete credentials.oauthTokenData;
+  assert.deepEqual(oauthKeys(credentials), {});
+  for (const method of [node.execute, node.methods.listSearch.searchProjects, node.methods.loadOptions.getOperations]) {
+    const ctx = context(credentials);
+    await assert.rejects(method.call(ctx), /The Leapter credential is not connected\. Open the credential and connect\./);
+    assert.deepEqual(ctx.calls, []);
+    assert.deepEqual(ctx.saved, []);
+  }
+});
+
 test('expired sign-ins cannot list projects or blueprints and send no requests', async () => {
   for (const method of [node.methods.listSearch.searchProjects, node.methods.loadOptions.getOperations]) {
     const ctx = context(data({ expired: true }));

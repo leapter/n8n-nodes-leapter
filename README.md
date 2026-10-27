@@ -139,6 +139,8 @@ Both credentials create and store a project's evaluation key on first use. Runs 
 
 The sign-in uses OAuth2 with PKCE and the `openid email profile` scopes. The id token lasts an hour; token refresh does not renew it. After that, listing projects or Blueprints and granting access to another project requires **Reconnect** (called **Switch account** in some n8n versions). Runs for projects with stored evaluation keys keep working, including after an n8n restart. Reconnecting preserves those keys.
 
+**Disconnect** is different from expiry or reconnect: n8n deletes the credential's OAuth token data, including its saved evaluation keys. Runs then require a new connection and new keys, which may need up to a minute to activate. Disconnect does not revoke the old evaluation keys on the cluster; revoke those separately in the Admin UI when they are no longer needed.
+
 n8n stores evaluation keys encrypted in the credential and does not send them to the editor. For OAuth2 they live inside the stored token data alongside the access, refresh and id tokens. Anyone able to export decrypted credentials can read the keys.
 
 ## Compatibility
