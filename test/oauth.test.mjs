@@ -71,7 +71,7 @@ function context(credentials = data(), { authentication = 'oAuth2', answer, refr
 const management = { method: 'GET', url: 'https://cluster.example/runtime-management/environments' };
 const engine = { method: 'GET', url: 'https://run.example/runtime/api/v1/test/app/openapi' };
 
-test('sign-in defaults to the public CLI client and hosted cluster without advanced settings', () => {
+test('sign-in defaults to the public CLI client and hosted cluster', () => {
   assert.equal(property('stage'), undefined);
   assert.equal(property('showAdvanced').default, false);
   const defaults = Object.fromEntries(credential.properties.map(({ name, default: value }) => [name, value]));
@@ -84,13 +84,16 @@ test('sign-in defaults to the public CLI client and hosted cluster without advan
   }
 });
 
-test('advanced settings override all addresses and client id even when the fields are hidden', () => {
+test('custom server settings survive n8n credential save and derive all addresses and client id', () => {
   const fields = {
+    showAdvanced: true,
     customClusterUrl: 'https://cluster.example', customRunUrl: 'https://run.example',
     customSignInServer: ' https://identity.example/auth/v1/ ', customClientId: ' custom-client ',
   };
-  for (const showAdvanced of [undefined, false, true]) {
-    const values = { ...fields, showAdvanced };
+  // Match the credential editor's save, including its removal of non-displayed fields.
+  const saved = NodeHelpers.getNodeParameters(credential.properties, fields, false, false, null, null);
+  assert.deepEqual(saved, fields);
+  for (const values of [fields, saved]) {
     assert.equal(derive('clusterUrl', values), fields.customClusterUrl);
     assert.equal(derive('runUrl', values), fields.customRunUrl);
     assert.equal(derive('clientId', values), 'custom-client');
@@ -100,6 +103,20 @@ test('advanced settings override all addresses and client id even when the field
   assert.equal(derive('runUrl', { ...fields, customRunUrl: undefined }), '');
   const customFields = credential.properties.filter((entry) => entry.displayOptions?.show?.showAdvanced?.includes(true));
   assert.equal(customFields.length, 4);
+});
+
+test('turning off custom server selects hosted settings before and after n8n saves', () => {
+  const fields = {
+    showAdvanced: false,
+    customClusterUrl: 'https://cluster.example', customRunUrl: 'https://run.example',
+    customSignInServer: 'https://identity.example/auth/v1', customClientId: 'custom-client',
+  };
+  const saved = NodeHelpers.getNodeParameters(credential.properties, fields, false, false, null, null);
+  assert.deepEqual(saved, {});
+  for (const name of ['clusterUrl', 'runUrl', 'clientId', 'authUrl', 'accessTokenUrl']) {
+    assert.equal(derive(name, fields), derive(name, {}));
+    assert.equal(derive(name, saved), derive(name, {}));
+  }
 });
 
 test('sign-in uses PKCE, hides OAuth plumbing, and keeps keys inside token data only', () => {

@@ -127,10 +127,10 @@ Both credentials create and store a project's evaluation key on first use. Runs 
 
 1. Send Leapter your n8n credential's **OAuth Redirect URL** to register the install. Sign-in reuses the Leapter CLI's OAuth client, so the consent page shows its name.
 2. Select **OAuth2** in the Leapter node and create a **Leapter OAuth2 API** credential.
-3. The hosted Leapter settings are already configured. For another cluster, turn on **Advanced Settings** and enter the fields below. Turning Advanced Settings off only hides the fields; it keeps your settings.
+3. The hosted Leapter settings are already configured. For another cluster, turn on **Use Custom Server** and enter the fields below. Turning it off switches back to hosted Leapter and clears custom settings when saved.
 4. Click **Connect**, sign in, and allow access. Then pick a project and Blueprint in the node.
 
-| Advanced field | Value |
+| Custom server field | Value |
 |-------------|-------|
 | Leapter Server | Your Runtime Cluster's address |
 | Run Address | Where the cluster answers runs; leave empty to use the Leapter Server |

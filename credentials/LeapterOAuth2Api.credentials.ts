@@ -11,7 +11,9 @@ import { oauthKeys, tokenData } from './oauth-keys';
 // Public values published by the hosted cluster's runtime-management/ui/config.json.
 const SIGN_IN_SERVER = 'https://yyahhgbxjvmqtdbgqgiy.supabase.co/auth/v1';
 const CLIENT_ID = '27429955-4cf8-4cfe-bcc7-fc2fb57989d6';
-const signInServer = `($self["customSignInServer"] || "${SIGN_IN_SERVER}").trim().replace(/\\/+$/, "")`;
+const connectionValue = (production: string, custom: string) =>
+	`={{ $self["showAdvanced"] === true ? ${custom} : "${production}" }}`;
+const signInServer = '($self["customSignInServer"] || "").trim().replace(/\\/+$/, "")';
 
 export class LeapterOAuth2Api implements ICredentialType {
 	name = 'leapterOAuth2Api';
@@ -29,11 +31,12 @@ export class LeapterOAuth2Api implements ICredentialType {
 			default: '',
 		},
 		{
-			displayName: 'Advanced Settings',
+			displayName: 'Use Custom Server',
 			name: 'showAdvanced',
 			type: 'boolean',
 			default: false,
-			description: 'Whether to show server and sign-in settings for self-hosted clusters or development',
+			description:
+				'Whether to connect to another Leapter installation. Turning this off uses hosted Leapter and resets custom settings when saved.',
 		},
 		{
 			displayName: 'Leapter Server',
@@ -77,19 +80,22 @@ export class LeapterOAuth2Api implements ICredentialType {
 			displayName: 'Authorization URL',
 			name: 'authUrl',
 			type: 'hidden',
-			default: `={{ ${signInServer} + "/oauth/authorize" }}`,
+			default: connectionValue(
+				`${SIGN_IN_SERVER}/oauth/authorize`,
+				`${signInServer} + "/oauth/authorize"`,
+			),
 		},
 		{
 			displayName: 'Access Token URL',
 			name: 'accessTokenUrl',
 			type: 'hidden',
-			default: `={{ ${signInServer} + "/oauth/token" }}`,
+			default: connectionValue(`${SIGN_IN_SERVER}/oauth/token`, `${signInServer} + "/oauth/token"`),
 		},
 		{
 			displayName: 'Client ID',
 			name: 'clientId',
 			type: 'hidden',
-			default: `={{ ($self["customClientId"] || "${CLIENT_ID}").trim() }}`,
+			default: connectionValue(CLIENT_ID, '($self["customClientId"] || "").trim()'),
 		},
 		{
 			displayName: 'Client Secret',
@@ -110,13 +116,13 @@ export class LeapterOAuth2Api implements ICredentialType {
 			displayName: 'Leapter Server',
 			name: 'clusterUrl',
 			type: 'hidden',
-			default: `={{ $self["customClusterUrl"] || "${DEFAULT_CLUSTER_URL}" }}`,
+			default: connectionValue(DEFAULT_CLUSTER_URL, '$self["customClusterUrl"]'),
 		},
 		{
 			displayName: 'Run Address',
 			name: 'runUrl',
 			type: 'hidden',
-			default: '={{ $self["customRunUrl"] || "" }}',
+			default: connectionValue('', '$self["customRunUrl"] || ""'),
 		},
 	];
 
