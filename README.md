@@ -29,7 +29,7 @@ Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes
 
 ### Prerequisites
 
-- **Node.js**: Version 20.19 - 24.x (n8n does not support Node.js 25+)
+- **Node.js**: Use a version supported by your n8n release: n8n 2.27.5 requires Node 22.22 or later; n8n 2.44.7 requires Node 24 or later.
 - **pnpm**: Package manager
 
 To check your Node.js version:
@@ -86,11 +86,11 @@ The Leapter node will be available in the n8n node picker.
 The Leapter node provides dynamic operations based on the Blueprints deployed to your Runtime Cluster:
 
 - **Execute Blueprint**: Run any public Leapter Blueprint with input parameters
-- **Dynamic Discovery**: Lists the projects and Blueprints your service key reaches and reads each Blueprint's input fields from its OpenAPI specification
+- **Dynamic Discovery**: Lists the projects and Blueprints your credential reaches and reads each Blueprint's input fields from its OpenAPI specification
 
 ### How It Works
 
-1. Select a **Project**: opening the field lists every deployed project with public Blueprints that your service key reaches. When the key reaches more than one environment, each project is shown as `environment · project`.
+1. Select a **Project**: opening the field lists every deployed project with public Blueprints that your credential reaches. When the credential reaches more than one environment, each project is shown as `environment · project`.
 2. Select a **Blueprint**: the dropdown lists the project's public Blueprints
 3. Configure input parameters using either:
    - **Visual Mode**: Map fields visually with type hints
@@ -101,15 +101,20 @@ The first use of a project creates its access key automatically; the node starts
 
 ## Credentials
 
-One Leapter credential gives access to every project in the environments its service key reaches.
+Choose **Service Account Key** or **OAuth2** in the selector at the top right of the node's credential section.
 
-### Setting Up Credentials
+- **Service Account Key** is the default, for shared or unattended workflows. An admin gives you a key of the cluster's `n8n` service account. Existing workflows keep using this credential without changes.
+- **OAuth2** signs in with your own Leapter account, for members on a registered n8n install. You need the **operator** role in the target environment and n8n **2.27 or later**.
+
+Both credentials create and store a project's evaluation key on first use. Runs send only that key to the engine; management calls use the service key or the signed-in member's id token.
+
+### Service Account Key
 
 1. **Deploy the project** in the Leapter Lab to an environment of your Runtime Cluster.
 2. **Create a key for the `n8n` service account** in the Runtime Cluster's Admin UI: **Service accounts → n8n → Create key**. Copy the key (starts with `lk_mgmt_`).
 3. **Create the credential** in n8n: add a "Leapter API" credential, paste that key and save; n8n tests it. For a self-hosted or development cluster, turn on **Advanced Settings** and enter its address as **Leapter Server**, and **Run Address** when it answers runs on another address.
 
-### Credential Fields
+#### Service Account Key Fields
 
 | Field | Description | Required |
 |-------|-------------|----------|
@@ -118,12 +123,29 @@ One Leapter credential gives access to every project in the environments its ser
 | Leapter Server | The Leapter Runtime Cluster: the Admin UI's address without `/runtime-management/ui`. Default `https://runtime.leapter.com`; only change for self-hosted clusters or development | No |
 | Run Address | Where the cluster answers blueprint runs. Empty means the Leapter Server; a local cluster answers them on `http://localhost:3003` | No |
 
-The credential also keeps the access keys it creates for each project, in a field n8n does not show. Anyone who can read the credential in n8n can read them.
+### OAuth2 Sign-in
+
+1. Send Leapter your n8n credential's **OAuth Redirect URL** to register the install. Sign-in reuses the Leapter CLI's OAuth client, so the consent page shows its name.
+2. Select **OAuth2** in the Leapter node and create a **Leapter OAuth2 API** credential.
+3. Leave **Stage** at **Production** for the hosted cluster. For another cluster, choose **Custom** and enter the fields below.
+4. Click **Connect**, sign in, and allow access. Then pick a project and Blueprint in the node.
+
+| Custom field | Value |
+|-------------|-------|
+| Leapter Server | Your Runtime Cluster's address |
+| Run Address | Where the cluster answers runs; leave empty to use the Leapter Server |
+| Sign-in Server | `cliOidc.issuerUrl` from `<Leapter Server>/runtime-management/ui/config.json` |
+| Client ID | `cliOidc.clientId` from the same configuration |
+
+The sign-in uses OAuth2 with PKCE and the `openid email profile` scopes. The id token lasts an hour; token refresh does not renew it. After that, listing projects or Blueprints and granting access to another project requires **Reconnect** (called **Switch account** in some n8n versions). Runs for projects with stored evaluation keys keep working, including after an n8n restart. Reconnecting preserves those keys.
+
+n8n stores evaluation keys encrypted in the credential and does not send them to the editor. For OAuth2 they live inside the stored token data alongside the access, refresh and id tokens. Anyone able to export decrypted credentials can read the keys.
 
 ## Compatibility
 
-- **Minimum n8n version**: 2.0.0
-- **Tested with**: n8n 2.0.3, 2.39.6 and 2.44.5
+- **Minimum n8n version**: 2.0.0 for Service Account Key; 2.27.0 for OAuth2 sign-in
+- **OAuth2 tested with**: n8n 2.27.5 and 2.44.7, including reconnect, expired sign-in and persisted-key runs
+- **Service Account Key tested with**: n8n 2.0.3, 2.27.5, 2.39.6, 2.44.5 and 2.44.7
 
 ## Usage
 

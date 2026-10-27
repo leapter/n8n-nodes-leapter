@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 ## What This Is
-n8n community node that dynamically discovers and executes Leapter blueprints deployed to a Leapter Runtime Cluster. It reads the projects and blueprints the service key reaches to populate dropdowns and each project's OpenAPI document to generate input fields - no hardcoded operations.
+n8n community node that dynamically discovers and executes Leapter blueprints deployed to a Leapter Runtime Cluster. It reads the projects and blueprints the selected credential reaches to populate dropdowns and each project's OpenAPI document to generate input fields - no hardcoded operations.
 
 ## Core Technologies
 - **TypeScript** (strict mode) - All source code
@@ -36,6 +36,8 @@ Releases are cut from the GitHub Releases UI (draft a release with a `vX.Y.Z` ta
 │   └── leapter.svg        # Node icon
 ├── credentials/
 │   ├── LeapterApi.credentials.ts  # Service key credential, per-project evaluation keys
+│   ├── LeapterOAuth2Api.credentials.ts # OAuth2 + PKCE sign-in, Production/Custom
+│   ├── oauth-keys.ts      # Sign-in key state and id-token expiry
 │   └── eval-keys.ts       # Evaluation key map, grace period, authenticate ↔ preAuthentication side channel, cluster address rules
 ├── dist/                  # Build output (git-ignored)
 └── package.json           # n8n node registration
@@ -111,6 +113,14 @@ Project is a resource locator, not an `options` dropdown: n8n 2.39+ (not 2.0.3) 
 All requests use `disableFollowRedirect: true`; `assertHttps()` refuses non-https addresses except `localhost`/`127.0.0.1` (`isSecureAddress()`), and `authenticate` refuses them too before adding any key, the credential test included. `clusterBaseUrl()` (`credentials/eval-keys.ts`) reads the credential's address: the default when unset, without trailing slashes or a pasted `/runtime-management/…` path.
 
 ### Authentication and Key Handling
+- The node's `authentication` options field drives n8n's credential-mode selector: `serviceAccountKey` (default, `leapterApi`) or `oAuth2` (`leapterOAuth2Api`). Each credential has matching `displayOptions`. Old workflows have no `authentication` value; `credentialTypeOf()` falls back to `leapterApi`.
+- OAuth2 extends `oAuth2Api` with PKCE. Production uses the hosted cluster's public CLI client; Custom derives the URLs and client id from four visible fields via hidden `$self` expressions. Each n8n install's callback must be registered with Leapter; no client is created by this node.
+- OAuth2 bypasses n8n's OAuth request signing: `controlPlaneRequest()` sends the id token as Bearer, `engineRequest()` sends only `X-API-Key`. Otherwise n8n would send the access token and refresh on engine 401s. The service-key path still uses `httpRequestWithAuthentication()`.
+- OAuth2 keys live in encrypted `oauthTokenData.leapter_eval_keys`. `provisionKey()` creates missing keys, then immediately calls `refreshOAuth2Token()`. The credential's `preAuthentication` only carries stored and in-memory keys into token data. n8n 2.27+ merges this during refresh and saves it. There is no `evalKeys` field or `authenticate` on this credential. Access and refresh tokens stay intact.
+- Sign-in state is scoped by cluster and id token; provisioning and saving are queued within a process. Keys record their cluster, as service-key entries do. A failed save is reported and retried without minting another key.
+- The id token's `exp`, with a 60 s margin, gates lists and new-key creation. Refresh does not renew it. Expired sign-ins require Reconnect for those operations, with no request sent for a missing key. Stored-key runs remain one request, even after expiry or restart. Reconnect preserves stored keys.
+
+The remaining key-handling details apply to the service-key credential:
 - The credential holds a key of the cluster's `n8n` service account (`serviceKey`, `lk_mgmt_…`). The control plane takes it; the engines take only per-project evaluation keys.
 - `authenticate` routes by URL path: `/runtime-management/` gets `Authorization: Bearer <serviceKey>`, `/runtime/api/v1/{env}/{app}/` gets `X-API-Key` from the hidden expirable field `evalKeys` (JSON map `{ "env/app": { id, key, mintedAt } }`). `evalKeys` is also a `password` field: n8n redacts it before the editor gets the credential and puts the stored value back on save. Read it in tests with `n8n export:credentials --decrypted`, not the REST API.
 - `preAuthentication` (every n8n version since 2.0 calls it before a request while `evalKeys` is empty, after every 401 and on every credential test) creates a key for each project that was requested without one, and replaces rejected keys: mint, then revoke the old id. A 401 does not say which request got it, so every project used in the last 2 min (`RECENT_USE_MS`) whose key is past the 90 s grace period (`GRACE_MS`) is probed with `GET …/openapi`; only a key the engine answers 401 is replaced. A fresh key answers 401 for up to 60 s, so a younger key is never replaced. n8n stores the returned `evalKeys`; it returns `''` while no project has a key, so n8n keeps calling it before each request. A project leaves `pending` before its key is created, and only the requested project's refusal fails the request, so one refused project (gone, or an environment without rights) does not block every later key.

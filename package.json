@@ -29,7 +29,7 @@
 		"dev": "n8n-node dev",
 		"lint": "n8n-node lint",
 		"lint:fix": "n8n-node lint --fix",
-		"test": "tsc && node --test test/",
+		"test": "tsc && node --test test/*.test.mjs",
 		"e2e": "bash e2e/run.sh",
 		"e2e:queue": "bash e2e/queue.sh",
 		"check:public": "bash scripts/check-public.sh",
@@ -42,7 +42,8 @@
 		"n8nNodesApiVersion": 1,
 		"strict": true,
 		"credentials": [
-			"dist/credentials/LeapterApi.credentials.js"
+			"dist/credentials/LeapterApi.credentials.js",
+			"dist/credentials/LeapterOAuth2Api.credentials.js"
 		],
 		"nodes": [
 			"dist/nodes/Leapter/Leapter.node.js"
