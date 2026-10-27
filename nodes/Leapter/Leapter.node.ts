@@ -441,6 +441,9 @@ export class Leapter implements INodeType {
           try {
             callable = await callableBlueprints(this, environment, application);
           } catch (error) {
+            if (error instanceof NodeOperationError) {
+              return { fields: [], emptyFieldsNotice: error.message };
+            }
             throw clusterError(this, error, 'Failed to load the blueprint fields');
           }
           if (!callable.some((blueprint) => blueprint.id === blueprintId)) {
@@ -856,6 +859,9 @@ async function getOpenApiSpec(
         disableFollowRedirect: true,
       })) as OpenAPISpec;
     } catch (error) {
+      if (error instanceof NodeOperationError) {
+        return error.message;
+      }
       if (isControlPlaneAnswer(error)) {
         return RUN_ADDRESS_MISSING;
       }

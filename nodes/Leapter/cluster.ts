@@ -389,8 +389,10 @@ export function clusterError(
     ? describeClusterError(answer.status, answer.body, answer.headers)
     : `${what}: ${(error as Error).message}`;
   if (answer?.status === 403 && credentialTypeOf(ctx) === 'leapterOAuth2Api') {
+    // OAuth management failures already have a NodeOperationError. This is an engine refusal,
+    // where the project key, not the signed-in member's role, determines access.
     message =
-      'The cluster refused the signed-in account. Check its access to this environment; creating project access keys requires the operator role.';
+      "The engine refused the project's access key. Check the project's evaluation key in the Admin UI.";
   }
   return new NodeOperationError(ctx.getNode(), message, { itemIndex });
 }

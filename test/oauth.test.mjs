@@ -275,12 +275,96 @@ for (const [status, expected] of [
         assert.ok(url.endsWith('/keys'), 'no engine call before a key is created');
         throw Object.assign(new Error('offline'), status ? { response: { status, data: {}, headers: {} } } : {});
       } });
-      await assert.rejects(method.call(ctx), expected);
+      if (method === node.execute) {
+        await assert.rejects(method.call(ctx), expected);
+      } else {
+        const result = await method.call(ctx);
+        assert.deepEqual(result.fields, []);
+        assert.match(result.emptyFieldsNotice, expected);
+      }
       assert.equal(ctx.calls.filter(({ url }) => url.endsWith('/keys')).length, 1);
       assert.deepEqual(ctx.saved, []);
     }
   });
 }
+
+test('field loads show management failures during blueprint discovery as notices', { timeout: 1500 }, async () => {
+  for (const [status, expected] of [
+    [401, /cluster rejected the Leapter sign-in.*reconnect/],
+    [403, /signed-in account.*operator role/],
+    [404, /could not find the requested environment/],
+  ]) {
+    const ctx = context(data(), { answer: () => {
+      throw Object.assign(new Error('Refused'), { response: { status } });
+    } });
+    const result = await node.methods.resourceMapping.getOperationFields.call(ctx);
+    assert.deepEqual(result.fields, []);
+    assert.match(result.emptyFieldsNotice, expected);
+    assert.equal(ctx.calls.length, 1);
+    assert.ok(ctx.calls[0].url.endsWith('/status'));
+    assert.deepEqual(ctx.saved, []);
+  }
+});
+
+test('field loads show expired and disconnected sign-ins without making requests', async () => {
+  for (const [credentials, expected] of [
+    [data({ expired: true }), /older than an hour.*reconnect/],
+    [data({ oauthTokenData: undefined }), /not connected.*connect/],
+  ]) {
+    const ctx = context(credentials);
+    const result = await node.methods.resourceMapping.getOperationFields.call(ctx);
+    assert.deepEqual(result.fields, []);
+    assert.match(result.emptyFieldsNotice, expected);
+    assert.deepEqual(ctx.calls, []);
+    assert.deepEqual(ctx.saved, []);
+  }
+});
+
+test('field loads show expiry between discovery and key creation without minting a key', async () => {
+  const credentials = data();
+  const ctx = context(credentials, { answer: ({ url }) => {
+    assert.ok(url.endsWith('/status'));
+    credentials.oauthTokenData.id_token = jwt({ sub: 'expired-during-discovery', exp: 1 });
+    return { environments: [{ applications: [{ slug: 'app', callable: [{ id: 'blueprint' }] }] }] };
+  } });
+  const result = await node.methods.resourceMapping.getOperationFields.call(ctx);
+  assert.deepEqual(result.fields, []);
+  assert.match(result.emptyFieldsNotice, /Access to app needs a new sign-in.*reconnect/);
+  assert.equal(ctx.calls.length, 1);
+  assert.deepEqual(ctx.saved, []);
+});
+
+test('field loads show key persistence failures and do not call the engine', { timeout: 1500 }, async () => {
+  const ctx = context(data(), {
+    answer: ({ url }) => {
+      if (url.endsWith('/status')) {
+        return { environments: [{ applications: [{ slug: 'app', callable: [{ id: 'blueprint' }] }] }] };
+      }
+      assert.ok(url.endsWith('/keys'), 'no engine request before the key is saved');
+      return { key: 'evaluation-key', credential: { id: 'new-key' } };
+    },
+    refresh: () => { throw new Error('Save failed'); },
+  });
+  const result = await node.methods.resourceMapping.getOperationFields.call(ctx);
+  assert.deepEqual(result.fields, []);
+  assert.match(result.emptyFieldsNotice, /access key for app could not be saved.*reconnect/);
+  assert.equal(ctx.calls.filter(({ url }) => url.endsWith('/keys')).length, 1);
+  assert.deepEqual(ctx.saved, []);
+});
+
+test('an OAuth engine 403 refers to the evaluation key, not the signed-in account or service key', { timeout: 1500 }, async () => {
+  const ctx = context(data({ keys: { 'test/app': key('app') } }), { answer: () => {
+    throw Object.assign(new Error('Forbidden'), { response: { status: 403 } });
+  } });
+  await assert.rejects(node.execute.call(ctx), (error) => {
+    assert.match(error.message, /engine refused the project's access key.*evaluation key/);
+    assert.doesNotMatch(error.message, /operator|signed-in|service key|reconnect/i);
+    return true;
+  });
+  assert.equal(ctx.calls.length, 1);
+  assert.match(ctx.calls[0].url, /\/models\/blueprint\/runs$/);
+  assert.deepEqual(ctx.saved, []);
+});
 
 test('management 401s ask to reconnect for project and blueprint lists, including with a saved key', async () => {
   for (const method of [node.methods.listSearch.searchProjects, node.methods.loadOptions.getOperations]) {

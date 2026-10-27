@@ -81,6 +81,7 @@ Releases are cut from the GitHub Releases UI (draft a release with a `vX.Y.Z` ta
 ### Error Handling
 - Wrap operations in try/catch
 - Throw `NodeOperationError` with node context and itemIndex
+- In resource-mapper field loads, return actionable `NodeOperationError` messages as `emptyFieldsNotice`: n8n hides thrown errors there.
 - Support `continueOnFail()` for graceful degradation
 - Return error in json output when continuing on fail
 
