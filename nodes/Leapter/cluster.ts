@@ -11,11 +11,18 @@ import {
   currentKeys,
   isSecureAddress,
 } from '../../credentials/eval-keys';
-import { idTokenUsable, oauthKeys, oauthKeyState, tokenData } from '../../credentials/oauth-keys';
+import { expiresSoon, oauthKeys, oauthKeyState, tokenData } from '../../credentials/oauth-keys';
 
 type Context = IExecuteFunctions | ILoadOptionsFunctions;
 
 const SIGN_IN_REQUIRED = 'The Leapter credential is not connected. Open the credential and connect.';
+const SIGN_IN_NOT_RENEWED =
+  'The Leapter sign-in could not be renewed. Open the credential and reconnect.';
+const NO_ID_TOKEN =
+  'The Leapter sign-in has no id token, which project access needs. Check that the sign-in server issues one for the openid scope, then reconnect.';
+
+/** Longest `usedBy` the cluster takes, in characters */
+const MAX_USED_BY_LENGTH = 64;
 
 /** Read the saved option directly: older workflows have no authentication parameter. */
 export function credentialTypeOf(ctx: Context): 'leapterApi' | 'leapterOAuth2Api' {
@@ -99,22 +106,18 @@ async function provisionOAuthKey(
   const run = async () => {
     const project = `${environment}/${application}`;
     if (!oauthKeys(credentials)[project]) {
+      // The id token names the sign-in that keeps new keys until they are saved
+      // (oauthKeyState). Without one, a new key would be lost and created again.
       const token = tokenData(credentials);
-      if (!idTokenUsable(token)) {
-        throw new NodeOperationError(
-          ctx.getNode(),
-          token.id_token
-            ? `Access to ${application} needs a new sign-in: the Leapter sign-in is older than an hour. Open the credential and reconnect.`
-            : SIGN_IN_REQUIRED,
-        );
+      if (typeof token.id_token !== 'string' && typeof token.access_token === 'string') {
+        throw new NodeOperationError(ctx.getNode(), NO_ID_TOKEN);
       }
       const cluster = clusterBaseUrl(credentials.clusterUrl);
       assertHttps(ctx, cluster);
       const answer = (await oauthManagementRequest(ctx, {
         method: 'POST',
         url: `${cluster}/runtime-management/environments/${environment}/applications/${application}/keys`,
-        headers: { Authorization: `Bearer ${String(token.id_token)}` },
-        body: { reason: 'n8n node (sign in)', usedBy: 'n8n' },
+        body: { reason: 'n8n node (sign in)', usedBy: usedByOf(ctx) },
         json: true,
       })) as { key: string; credential: { id: string } };
       state.latest[project] = {
@@ -152,7 +155,21 @@ async function provisionOAuthKey(
   await result;
 }
 
-/** Management uses the id token; never let n8n substitute or refresh an access token on a 401. */
+/**
+ * The label of an OAuth key in the cluster's key list: `n8n: <credential name>`, so keys of two
+ * credentials can be told apart. One line of at most 64 characters, as the cluster requires.
+ */
+function usedByOf(ctx: Context): string {
+  const name = String(ctx.getNode().credentials?.leapterOAuth2Api?.name ?? '')
+    .replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, ' ')
+    .trim();
+  return name ? [...`n8n: ${name}`].slice(0, MAX_USED_BY_LENGTH).join('').trim() : 'n8n';
+}
+
+/**
+ * Management sends the sign-in's access token itself. n8n's OAuth signing is not used: it would
+ * also sign engine requests and refresh on an engine's 401, which means a key that is activating.
+ */
 export async function controlPlaneRequest(
   ctx: Context,
   options: IHttpRequestOptions,
@@ -160,47 +177,84 @@ export async function controlPlaneRequest(
   if (credentialTypeOf(ctx) === 'leapterApi') {
     return await ctx.helpers.httpRequestWithAuthentication.call(ctx, 'leapterApi', options);
   }
-  const token = tokenData(await ctx.getCredentials('leapterOAuth2Api'));
-  if (!idTokenUsable(token)) {
-    throw new NodeOperationError(
-      ctx.getNode(),
-      token.id_token
-        ? 'The Leapter sign-in is older than an hour, so projects and blueprints cannot be listed. Open the credential and reconnect. Runs keep working.'
-        : SIGN_IN_REQUIRED,
-    );
-  }
-  return await oauthManagementRequest(ctx, {
-    ...options,
-    headers: { ...withoutAuth(options.headers), Authorization: `Bearer ${String(token.id_token)}` },
-  });
+  return await oauthManagementRequest(ctx, options);
 }
 
-/** Management failures cannot become engine activation retries, even for 401 or 404. */
+/**
+ * The access token for a management request: renewed first when it expires within a minute, or
+ * when the cluster refused it (`renew`). A failed early renewal sends the current token anyway
+ * (the sign-in server may be briefly away); only a failed renewal after a refusal asks to
+ * reconnect.
+ */
+async function accessToken(ctx: Context, renew = false): Promise<string> {
+  const current = tokenData(await ctx.getCredentials('leapterOAuth2Api')).access_token;
+  if (typeof current !== 'string' || current === '') {
+    throw new NodeOperationError(ctx.getNode(), SIGN_IN_REQUIRED);
+  }
+  if (!renew && !expiresSoon(current)) {
+    return current;
+  }
+  let renewed: unknown;
+  try {
+    // Also runs preAuthentication, which keeps the stored evaluation keys
+    renewed = (await ctx.helpers.refreshOAuth2Token.call(ctx, 'leapterOAuth2Api'))?.access_token;
+  } catch {
+    renewed = undefined;
+  }
+  if (typeof renewed === 'string' && renewed !== '') {
+    return renewed;
+  }
+  if (!renew) {
+    return current;
+  }
+  throw new NodeOperationError(ctx.getNode(), SIGN_IN_NOT_RENEWED);
+}
+
+/**
+ * A management request with the access token; a 401 renews it and asks once more. Failures
+ * cannot become engine activation retries, even for 401 or 404.
+ */
 async function oauthManagementRequest(
   ctx: Context,
   options: IHttpRequestOptions,
 ): Promise<unknown> {
-  try {
-    return await plainRequest(ctx, options);
-  } catch (error) {
-    const answer = answerOf(error);
-    let message: string;
-    if (answer?.status === 401) {
-      message =
-        'The cluster rejected the Leapter sign-in. Open the credential and reconnect. For a custom installation, check Sign-in Server and Client ID under Advanced Settings.';
-    } else if (answer?.status === 403) {
-      message =
-        'The cluster refused the signed-in account. Check its access to this environment; creating project access keys requires the operator role.';
-    } else if (answer?.status === 404) {
-      message =
-        'The cluster could not find the requested environment, project or management endpoint. Check the selected project and Leapter Server under Advanced Settings.';
-    } else {
-      message = answer
-        ? describeClusterError(answer.status, answer.body, answer.headers)
-        : `Leapter management request failed: ${(error as Error).message}`;
+  const send = async (token: string): Promise<{ value: unknown } | { error: unknown }> => {
+    try {
+      return {
+        value: await plainRequest(ctx, {
+          ...options,
+          headers: { ...withoutAuth(options.headers), Authorization: `Bearer ${token}` },
+        }),
+      };
+    } catch (error) {
+      return { error };
     }
-    throw new NodeOperationError(ctx.getNode(), message);
+  };
+  let sent = await send(await accessToken(ctx));
+  if ('error' in sent && answerOf(sent.error)?.status === 401) {
+    sent = await send(await accessToken(ctx, true));
   }
+  if ('value' in sent) {
+    return sent.value;
+  }
+  const { error } = sent;
+  const answer = answerOf(error);
+  let message: string;
+  if (answer?.status === 401) {
+    message =
+      'The cluster rejected the Leapter sign-in. Open the credential and reconnect. If that does not help, check the Client ID, and for a custom installation the Sign-in Server under Advanced Settings.';
+  } else if (answer?.status === 403) {
+    message =
+      'The cluster refused the signed-in account. Check its access to this environment; creating project access keys requires the operator role.';
+  } else if (answer?.status === 404) {
+    message =
+      'The cluster could not find the requested environment, project or management endpoint. Check the selected project and Leapter Server under Advanced Settings.';
+  } else {
+    message = answer
+      ? describeClusterError(answer.status, answer.body, answer.headers)
+      : `Leapter management request failed: ${(error as Error).message}`;
+  }
+  throw new NodeOperationError(ctx.getNode(), message);
 }
 
 /** Engine requests carry only a project's evaluation key, even after the sign-in expires. */

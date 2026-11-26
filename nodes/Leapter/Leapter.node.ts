@@ -498,17 +498,23 @@ export class Leapter implements INodeType {
 
         if (inputMode === 'visual') {
           const parameters = this.getNodeParameter('parameters', itemIndex, {}) as {
-            value?: Record<string, unknown>;
+            mappingMode?: string;
+            value?: Record<string, unknown> | null;
+            schema?: Array<{ id: string }>;
           };
-          const paramValues = parameters.value || {};
+          const autoMap = parameters.mappingMode === 'autoMapInputData';
+          const paramValues = autoMap
+            ? autoMapped(items[itemIndex].json, parameters.schema)
+            : parameters.value || {};
 
           for (const [key, value] of Object.entries(paramValues)) {
             // Only blueprint inputs: never the no-inputs placeholder
             if (key.startsWith('body.') && key !== NO_INPUTS_FIELD) {
               const paramName = key.replace('body.', '');
-              // Try to parse JSON strings (for arrays and objects)
-              const parsedValue = tryParseJson(value);
-              bodyParams[paramName] = parsedValue as IDataObject[keyof IDataObject];
+              // Mapped fields may hold JSON text (array fields, values saved with 0.2.0). An
+              // item's own values keep their type: a string input stays a string.
+              const sent = autoMap ? value : tryParseJson(value);
+              bodyParams[paramName] = sent as IDataObject[keyof IDataObject];
             }
           }
         } else {
@@ -778,19 +784,6 @@ function operationFields(
             })),
             canBeUsedToMatch: false,
           });
-        } else if (resolvedField.type === 'array') {
-          // Array fields - show hint about JSON format
-          const itemType = resolvedField.items?.type || 'string';
-          fields.push({
-            id: `body.${fieldName}`,
-            displayName: `${fieldDisplayName} (JSON array)`,
-            required: required.includes(fieldName),
-            defaultMatch: false,
-            display: true,
-            type: 'string',
-            canBeUsedToMatch: false,
-            defaultValue: itemType === 'string' ? '["value1", "value2"]' : '[1, 2, 3]',
-          });
         } else {
           fields.push({
             id: `body.${fieldName}`,
@@ -912,6 +905,19 @@ function resolveSchema(schema: JSONSchema, spec: OpenAPISpec): JSONSchema {
   }
 
   return schema;
+}
+
+/**
+ * Map Automatically: the item's fields named like a blueprint input, as `body.<name>` values. The
+ * stored schema lists the inputs; other fields of the item are not sent.
+ */
+function autoMapped(json: IDataObject, schema: Array<{ id: string }> = []): Record<string, unknown> {
+  const inputs = new Set(schema.map((field) => field.id));
+  return Object.fromEntries(
+    Object.entries(json)
+      .map(([name, value]) => [`body.${name}`, value] as const)
+      .filter(([id]) => inputs.has(id)),
+  );
 }
 
 /**

@@ -8,7 +8,7 @@ import type {
 import { DEFAULT_CLUSTER_URL } from './eval-keys';
 import { oauthKeys, tokenData } from './oauth-keys';
 
-// Public sign-in defaults for hosted Leapter and its dedicated n8n OAuth client.
+// Public sign-in defaults for hosted Leapter and its shared n8n OAuth client.
 const SIGN_IN_SERVER = 'https://yyahhgbxjvmqtdbgqgiy.supabase.co/auth/v1';
 const CLIENT_ID = 'e97ead56-420a-4298-8784-ff4775034c7c';
 const connectionValue = (production: string, custom: string) =>
@@ -25,10 +25,19 @@ export class LeapterOAuth2Api implements ICredentialType {
 	properties: INodeProperties[] = [
 		{
 			displayName:
-				'For Leapter SaaS, send Leapter the OAuth Redirect URL above to enable sign-in. For self-hosted Leapter, ask your administrator to register this URL with your sign-in server. Alternatively, use Service Account Key.',
+				'Ask an owner or admin of your Leapter team to add the OAuth Redirect URL above in the Leapter Lab (Integrations → n8n), then enter the Client ID shown there. For self-hosted Leapter, ask your administrator. Alternatively, use Service Account Key.',
 			name: 'registrationNotice',
 			type: 'notice',
 			default: '',
+		},
+		{
+			// Named for compatibility: it was a custom setting before every n8n instance had its own client
+			displayName: 'Client ID',
+			name: 'customClientId',
+			type: 'string',
+			default: CLIENT_ID,
+			required: true,
+			description: 'The Client ID the Leapter Lab showed when you registered this n8n instance',
 		},
 		{
 			displayName: 'Advanced Settings',
@@ -36,7 +45,7 @@ export class LeapterOAuth2Api implements ICredentialType {
 			type: 'boolean',
 			default: false,
 			description:
-				'Whether to configure server and sign-in settings for another Leapter installation. Turning this off resets them to hosted Leapter when saved.',
+				'Whether to configure server and sign-in settings for another Leapter installation. Turning this off resets them, but not the Client ID, to hosted Leapter when saved.',
 		},
 		{
 			displayName: 'Leapter Server',
@@ -66,15 +75,6 @@ export class LeapterOAuth2Api implements ICredentialType {
 			hint: "Ask your Leapter administrator for the Sign-in Server and the Client ID of the cluster's n8n sign-in client.",
 			displayOptions: { show: { showAdvanced: [true] } },
 		},
-		{
-			displayName: 'Client ID',
-			name: 'customClientId',
-			type: 'string',
-			default: CLIENT_ID,
-			required: true,
-			description: 'The public OAuth client identifier for this cluster',
-			displayOptions: { show: { showAdvanced: [true] } },
-		},
 		{ displayName: 'Grant Type', name: 'grantType', type: 'hidden', default: 'pkce' },
 		{
 			displayName: 'Authorization URL',
@@ -95,7 +95,8 @@ export class LeapterOAuth2Api implements ICredentialType {
 			displayName: 'Client ID',
 			name: 'clientId',
 			type: 'hidden',
-			default: connectionValue(CLIENT_ID, '($self["customClientId"] || "").trim()'),
+			// Credentials saved before Client ID was shown outside Advanced Settings may not have it
+			default: `={{ ($self["customClientId"] || "${CLIENT_ID}").trim() }}`,
 		},
 		{
 			displayName: 'Client Secret',
