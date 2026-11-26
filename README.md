@@ -126,7 +126,7 @@ Both credentials create and store a project's evaluation key on first use. Runs 
 ### OAuth2 Sign-in
 
 1. Select **OAuth2** in the Leapter node and create a **Leapter OAuth2 API** credential. Copy its **OAuth Redirect URL**.
-2. For **Leapter SaaS**, an owner or admin of your Leapter team adds that URL in the Leapter Lab under **Integrations → n8n**. Enter the **Client ID** shown there in the credential. The team has one Client ID for all its n8n instances, and only its members can sign in with it. For **self-hosted Leapter**, ask your administrator for a Client ID registered with this URL. The cluster must accept that client's access token: its audience must be listed in the cluster's issuer mapping.
+2. For **Leapter SaaS**, an owner or admin of your Leapter team creates a Client ID with that URL in the Leapter Lab under **Integrations → n8n**. Enter that **Client ID** in the credential. A team can have one Client ID per n8n instance, and only its members can sign in with them. For **self-hosted Leapter**, ask your administrator for a Client ID registered with this URL. The cluster must accept that client's access token: its audience must be listed in the cluster's issuer mapping.
 3. The hosted Leapter server settings are already configured. For another cluster, turn on **Advanced Settings** and enter the fields below. Turning it off switches back to hosted Leapter and clears these fields when saved; the Client ID stays.
 4. Click **Connect**, sign in, and allow access. Then pick a project and Blueprint in the node.
 

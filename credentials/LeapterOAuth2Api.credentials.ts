@@ -25,7 +25,7 @@ export class LeapterOAuth2Api implements ICredentialType {
 	properties: INodeProperties[] = [
 		{
 			displayName:
-				'Ask an owner or admin of your Leapter team to add the OAuth Redirect URL above in the Leapter Lab (Integrations → n8n), then enter the Client ID shown there. For self-hosted Leapter, ask your administrator. Alternatively, use Service Account Key.',
+				'Ask an owner or admin of your Leapter team to create a Client ID with the OAuth Redirect URL above in the Leapter Lab (Integrations → n8n), then enter that Client ID. For self-hosted Leapter, ask your administrator. Alternatively, use Service Account Key.',
 			name: 'registrationNotice',
 			type: 'notice',
 			default: '',
@@ -37,7 +37,7 @@ export class LeapterOAuth2Api implements ICredentialType {
 			type: 'string',
 			default: CLIENT_ID,
 			required: true,
-			description: 'The Client ID the Leapter Lab showed when you registered this n8n instance',
+			description: 'The Client ID your team created for this n8n instance in the Leapter Lab',
 		},
 		{
 			displayName: 'Advanced Settings',
