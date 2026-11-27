@@ -31,11 +31,14 @@ export class LeapterOAuth2Api implements ICredentialType {
 			default: '',
 		},
 		{
-			// Named for compatibility: it was a custom setting before every n8n instance had its own client
+			// Named for compatibility: it was a custom setting before every n8n instance had its own client.
+			// Empty for a new credential: the shared client knows only the callbacks Leapter registered
+			// by hand, so pre-filling it would end in a redirect error on other n8n instances.
 			displayName: 'Client ID',
 			name: 'customClientId',
 			type: 'string',
-			default: CLIENT_ID,
+			default: '',
+			placeholder: 'Client ID from the Leapter Lab',
 			required: true,
 			description: 'The Client ID your team created for this n8n instance in the Leapter Lab',
 		},
@@ -95,7 +98,8 @@ export class LeapterOAuth2Api implements ICredentialType {
 			displayName: 'Client ID',
 			name: 'clientId',
 			type: 'hidden',
-			// Credentials saved before Client ID was shown outside Advanced Settings may not have it
+			// Credentials saved before Client ID was shown outside Advanced Settings, or saved with the
+			// shared client while that was the default, may not have it: they keep the shared client
 			default: `={{ ($self["customClientId"] || "${CLIENT_ID}").trim() }}`,
 		},
 		{

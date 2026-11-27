@@ -129,11 +129,12 @@ test('turning off custom server selects hosted settings before and after n8n sav
   assert.equal(derive('clientId', saved), 'custom-client');
 });
 
-test('the Client ID is shown without Advanced Settings and old credentials keep the shared client', () => {
+test('the Client ID is shown without Advanced Settings, starts empty, and old credentials keep the shared client', () => {
   const clientId = property('customClientId');
   assert.equal(clientId.displayOptions, undefined);
   assert.equal(clientId.required, true);
-  assert.equal(clientId.default, 'e97ead56-420a-4298-8784-ff4775034c7c');
+  // A new credential asks for the team's own Client ID instead of offering the shared client
+  assert.equal(clientId.default, '');
   // Saved before the field was shown: hosted credentials have no customClientId
   assert.equal(derive('clientId', { showAdvanced: false }), 'e97ead56-420a-4298-8784-ff4775034c7c');
   assert.equal(derive('clientId', { showAdvanced: false, customClientId: ' own-client ' }), 'own-client');
