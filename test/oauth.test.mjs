@@ -5,7 +5,7 @@ import { test } from 'node:test';
 const require = createRequire(import.meta.url);
 const { Expression, NodeApiError, NodeHelpers, NodeOperationError, Workflow } = require('n8n-workflow');
 const { LeapterOAuth2Api } = require('../dist/credentials/LeapterOAuth2Api.credentials.js');
-const { idTokenUsable, oauthKeys, oauthKeyState } = require('../dist/credentials/oauth-keys.js');
+const { expiresSoon, oauthKeys, oauthKeyState } = require('../dist/credentials/oauth-keys.js');
 const { credentialTypeOf, controlPlaneRequest, engineRequest, provisionKey } = require('../dist/nodes/Leapter/cluster.js');
 const { Leapter } = require('../dist/nodes/Leapter/Leapter.node.js');
 
@@ -22,8 +22,9 @@ function data({ expired = false, keys = {}, ...fields } = {}) {
     clusterUrl: 'https://cluster.example',
     runUrl: 'https://run.example',
     oauthTokenData: {
-      id_token: jwt({ sub: `member-${++serial}`, exp: Date.now() / 1000 + (expired ? -1 : 3600) }),
-      access_token: 'access-token',
+      // The id token only names the sign-in; it has long expired in practice
+      id_token: jwt({ sub: `member-${++serial}`, exp: Date.now() / 1000 - 3600 }),
+      access_token: jwt({ sub: `member-${serial}`, exp: Date.now() / 1000 + (expired ? -1 : 3600) }),
       refresh_token: 'refresh-token',
       leapter_eval_keys: keys,
     },
@@ -37,7 +38,10 @@ function context(credentials = data(), { authentication = 'oAuth2', answer, refr
   const parameters = { authentication, project: 'test::app', operation: 'blueprint', inputMode: 'json', parametersJson: '{}' };
   const ctx = {
     calls, saved, credentials,
-    getNode: () => ({ name: 'Leapter', type: 'CUSTOM.leapter', typeVersion: 1, position: [0, 0], parameters }),
+    getNode: () => ({
+      name: 'Leapter', type: 'CUSTOM.leapter', typeVersion: 1, position: [0, 0], parameters,
+      credentials: { leapterOAuth2Api: { id: 'credential', name: 'Leapter (Ada)' } },
+    }),
     async getCredentials(type) {
       assert.equal(type, authentication === 'oAuth2' ? 'leapterOAuth2Api' : 'leapterApi');
       return credentials;
@@ -67,6 +71,11 @@ function context(credentials = data(), { authentication = 'oAuth2', answer, refr
   };
   return ctx;
 }
+
+// A refresh that gives the sign-in a new access token
+const renewing = (credentials, token = jwt({ renewed: ++serial, exp: Date.now() / 1000 + 3600 })) => () => {
+  credentials.oauthTokenData.access_token = token;
+};
 
 const management = { method: 'GET', url: 'https://cluster.example/runtime-management/environments' };
 const engine = { method: 'GET', url: 'https://run.example/runtime/api/v1/test/app/openapi' };
@@ -102,21 +111,33 @@ test('custom server settings survive n8n credential save and derive all addresse
   }
   assert.equal(derive('runUrl', { ...fields, customRunUrl: undefined }), '');
   const customFields = credential.properties.filter((entry) => entry.displayOptions?.show?.showAdvanced?.includes(true));
-  assert.equal(customFields.length, 4);
+  assert.equal(customFields.length, 3);
 });
 
-test('turning off custom server selects hosted settings before and after n8n saves', () => {
+test('turning off custom server selects hosted settings before and after n8n saves, keeping the Client ID', () => {
   const fields = {
     showAdvanced: false,
     customClusterUrl: 'https://cluster.example', customRunUrl: 'https://run.example',
     customSignInServer: 'https://identity.example/auth/v1', customClientId: 'custom-client',
   };
   const saved = NodeHelpers.getNodeParameters(credential.properties, fields, false, false, null, null);
-  assert.deepEqual(saved, {});
-  for (const name of ['clusterUrl', 'runUrl', 'clientId', 'authUrl', 'accessTokenUrl']) {
+  assert.deepEqual(saved, { customClientId: 'custom-client' });
+  for (const name of ['clusterUrl', 'runUrl', 'authUrl', 'accessTokenUrl']) {
     assert.equal(derive(name, fields), derive(name, {}));
     assert.equal(derive(name, saved), derive(name, {}));
   }
+  assert.equal(derive('clientId', saved), 'custom-client');
+});
+
+test('the Client ID is shown without Advanced Settings, starts empty, and old credentials keep the shared client', () => {
+  const clientId = property('customClientId');
+  assert.equal(clientId.displayOptions, undefined);
+  assert.equal(clientId.required, true);
+  // A new credential asks for the team's own Client ID instead of offering the shared client
+  assert.equal(clientId.default, '');
+  // Saved before the field was shown: hosted credentials have no customClientId
+  assert.equal(derive('clientId', { showAdvanced: false }), 'e97ead56-420a-4298-8784-ff4775034c7c');
+  assert.equal(derive('clientId', { showAdvanced: false, customClientId: ' own-client ' }), 'own-client');
 });
 
 test('sign-in uses PKCE, hides OAuth plumbing, and keeps keys inside token data only', () => {
@@ -145,11 +166,63 @@ test('authentication defaults to Service Account Key and binds each credential t
   assert.equal(credentialTypeOf({ getNode: () => ({ parameters: {} }) }), 'leapterApi');
 });
 
-test('management sends the id token as Bearer through plain HTTP, never the access token', async () => {
+test('management sends the access token as Bearer through plain HTTP, never the id token', async () => {
   const ctx = context();
   await controlPlaneRequest(ctx, { ...management, headers: { authorization: 'wrong', 'x-api-key': 'wrong', Accept: 'application/json' } });
-  assert.deepEqual(ctx.calls[0].headers, { Accept: 'application/json', Authorization: `Bearer ${ctx.credentials.oauthTokenData.id_token}` });
+  assert.deepEqual(ctx.calls[0].headers, { Accept: 'application/json', Authorization: `Bearer ${ctx.credentials.oauthTokenData.access_token}` });
   assert.equal(ctx.calls[0].disableFollowRedirect, true);
+  assert.deepEqual(ctx.saved, []);
+});
+
+test('an access token that expires within a minute is renewed before a management request', async () => {
+  const credentials = data({ expired: true });
+  const ctx = context(credentials, { refresh: renewing(credentials, 'renewed-token') });
+  await controlPlaneRequest(ctx, management);
+  assert.equal(ctx.calls.length, 1);
+  assert.equal(ctx.calls[0].headers.Authorization, 'Bearer renewed-token');
+  assert.equal(ctx.saved.length, 1);
+});
+
+test('a management 401 renews the access token and asks once more', async () => {
+  const credentials = data();
+  const ctx = context(credentials, {
+    refresh: renewing(credentials, 'renewed-token'),
+    answer: ({ headers }) => {
+      if (headers.Authorization !== 'Bearer renewed-token') {
+        throw Object.assign(new Error('Unauthorized'), { response: { status: 401 } });
+      }
+      return { environments: [] };
+    },
+  });
+  assert.deepEqual(await controlPlaneRequest(ctx, management), { environments: [] });
+  assert.equal(ctx.calls.length, 2);
+  assert.equal(ctx.saved.length, 1);
+});
+
+test('a failed early renewal sends the current token: a sign-in server that is briefly away is no reason to reconnect', async () => {
+  const credentials = data({ expired: true });
+  const current = credentials.oauthTokenData.access_token;
+  const ctx = context(credentials, { refresh: () => { throw new Error('ETIMEDOUT'); } });
+  assert.deepEqual(await controlPlaneRequest(ctx, management), { body: { result: 'ok' }, headers: { 'x-run-id': 'run-id' } });
+  assert.equal(ctx.calls.length, 1);
+  assert.equal(ctx.calls[0].headers.Authorization, `Bearer ${current}`);
+});
+
+test('a refused token that cannot be renewed asks to reconnect', async () => {
+  const ctx = context(data({ expired: true }), {
+    refresh: () => { throw new Error('invalid_grant'); },
+    answer: () => { throw Object.assign(new Error('Unauthorized'), { response: { status: 401 } }); },
+  });
+  await assert.rejects(controlPlaneRequest(ctx, management), /could not be renewed\. Open the credential and reconnect\./);
+  assert.equal(ctx.calls.length, 1);
+});
+
+test('no key is created for a sign-in without an id token', async () => {
+  const credentials = data();
+  delete credentials.oauthTokenData.id_token;
+  const ctx = context(credentials);
+  await assert.rejects(provisionKey(ctx, 'test', 'app'), /no id token/);
+  assert.ok(ctx.calls.every(({ url }) => !url.endsWith('/keys')));
 });
 
 test('engine sends only the evaluation key and keeps non-auth headers', async () => {
@@ -162,14 +235,14 @@ test('engine sends only the evaluation key and keeps non-auth headers', async ()
   assert.equal(ctx.calls[0].disableFollowRedirect, true);
 });
 
-test('a missing key is created with the id token and saved immediately through OAuth refresh', async () => {
+test('a missing key is created with the access token and saved immediately through OAuth refresh', async () => {
   const ctx = context();
   await provisionKey(ctx, 'https://run.example', 'test', 'app');
   assert.equal(ctx.calls.length, 1);
   assert.equal(ctx.calls[0].method, 'POST');
   assert.equal(ctx.calls[0].url, 'https://cluster.example/runtime-management/environments/test/applications/app/keys');
-  assert.equal(ctx.calls[0].headers.Authorization, `Bearer ${ctx.credentials.oauthTokenData.id_token}`);
-  assert.deepEqual(ctx.calls[0].body, { reason: 'n8n node (sign in)', usedBy: 'n8n' });
+  assert.equal(ctx.calls[0].headers.Authorization, `Bearer ${ctx.credentials.oauthTokenData.access_token}`);
+  assert.deepEqual(ctx.calls[0].body, { reason: 'n8n node (sign in)', usedBy: 'n8n: Leapter (Ada)' });
   assert.equal(ctx.saved.length, 1);
   assert.equal(ctx.saved[0].leapter_eval_keys['test/app'].id, 'new-key-id');
   for (const name of ['access_token', 'refresh_token', 'id_token']) {
@@ -177,11 +250,29 @@ test('a missing key is created with the id token and saved immediately through O
   }
 });
 
-test('an expired sign-in without a project key fails before any request or refresh', async () => {
-  const ctx = context(data({ expired: true }));
-  await assert.rejects(node.execute.call(ctx), /Access to app needs a new sign-in: the Leapter sign-in is older than an hour\. Open the credential and reconnect\./);
-  assert.deepEqual(ctx.calls, []);
-  assert.deepEqual(ctx.saved, []);
+test('a key is named after the credential on one line of at most 64 characters', async () => {
+  for (const [name, expected] of [
+    [undefined, 'n8n'],
+    ['  ', 'n8n'],
+    ['Line\nbreak\u2028here', 'n8n: Line break here'],
+    ['x'.repeat(80), `n8n: ${'x'.repeat(59)}`],
+    ['😀'.repeat(70), `n8n: ${'😀'.repeat(59)}`],
+  ]) {
+    const ctx = context();
+    const getNode = ctx.getNode;
+    ctx.getNode = () => ({ ...getNode(), credentials: { leapterOAuth2Api: { id: 'credential', name } } });
+    await provisionKey(ctx, 'https://run.example', 'test', 'app');
+    assert.equal(ctx.calls[0].body.usedBy, expected);
+  }
+});
+
+test('an expired access token is renewed before a key is created', async () => {
+  const credentials = data({ expired: true });
+  const ctx = context(credentials, { refresh: renewing(credentials, 'renewed-token') });
+  await provisionKey(ctx, 'https://run.example', 'test', 'app');
+  assert.equal(ctx.calls.length, 1);
+  assert.equal(ctx.calls[0].headers.Authorization, 'Bearer renewed-token');
+  assert.equal(ctx.saved.at(-1).leapter_eval_keys['test/app'].id, 'new-key-id');
 });
 
 test('disconnect clears access to stored and cached keys and asks to connect without sending requests', async () => {
@@ -198,16 +289,23 @@ test('disconnect clears access to stored and cached keys and asks to connect wit
   }
 });
 
-test('expired sign-ins cannot list projects or blueprints and send no requests', async () => {
+test('projects and blueprints are listed after the access token expired, with a renewed one', async () => {
   for (const method of [node.methods.listSearch.searchProjects, node.methods.loadOptions.getOperations]) {
-    const ctx = context(data({ expired: true }));
-    await assert.rejects(method.call(ctx), /The Leapter sign-in is older than an hour, so projects and blueprints cannot be listed\. Open the credential and reconnect\. Runs keep working\./);
-    assert.deepEqual(ctx.calls, []);
-    assert.deepEqual(ctx.saved, []);
+    const credentials = data({ expired: true, keys: { 'test/app': key('app') } });
+    const ctx = context(credentials, {
+      refresh: renewing(credentials, 'renewed-token'),
+      answer: ({ url }) => url.endsWith('/environments')
+        ? [{ name: 'test' }]
+        : { environments: [{ name: 'test', applications: [{ slug: 'app', callable: [{ id: 'blueprint', name: 'Blueprint' }] }] }] },
+    });
+    await method.call(ctx);
+    const managementCalls = ctx.calls.filter(({ url }) => url.includes('/runtime-management/'));
+    assert.ok(managementCalls.length > 0);
+    for (const call of managementCalls) assert.equal(call.headers.Authorization, 'Bearer renewed-token');
   }
 });
 
-test('a run with a stored key is one engine request even after the id token expires', async () => {
+test('a run with a stored key is one engine request even after the access token expires', async () => {
   const ctx = context(data({ expired: true, keys: { 'test/app': key('app') } }));
   const [[item]] = await node.execute.call(ctx);
   assert.equal(item.json.result, 'ok');
@@ -218,11 +316,13 @@ test('a run with a stored key is one engine request even after the id token expi
   assert.deepEqual(ctx.saved, []);
 });
 
-test('the id token expiry check has a 60 second margin and safely rejects malformed tokens', () => {
-  for (const id_token of [undefined, '', 'malformed', 'x.invalid.y', jwt({}), jwt({ exp: 'later' }), jwt({ exp: Date.now() / 1000 + 59 })]) {
-    assert.equal(idTokenUsable({ id_token }), false);
+test('an access token expires soon within 60 seconds; a token without a readable exp is left to the 401', () => {
+  for (const token of [jwt({ exp: Date.now() / 1000 + 59 }), jwt({ exp: Date.now() / 1000 - 1 })]) {
+    assert.equal(expiresSoon(token), true);
   }
-  assert.equal(idTokenUsable({ id_token: jwt({ exp: Date.now() / 1000 + 61 }) }), true);
+  for (const token of [undefined, '', 'opaque', 'x.invalid.y', jwt({}), jwt({ exp: 'later' }), jwt({ exp: Date.now() / 1000 + 61 })]) {
+    assert.equal(expiresSoon(token), false);
+  }
 });
 
 test('concurrent first uses mint once and stale copies preserve keys for other projects', async () => {
@@ -259,8 +359,9 @@ test('a refused mint leaves the queue usable and is not treated as a saved key',
   assert.equal(ctx.saved.length, 1);
 });
 
-for (const [status, expected] of [
-  [401, /cluster rejected the Leapter sign-in.*reconnect/],
+// A 401 renews the access token and asks once more; nothing else is repeated
+for (const [status, expected, attempts = 1] of [
+  [401, /cluster rejected the Leapter sign-in.*reconnect/, 2],
   [404, /could not find the requested environment, project or management endpoint/],
   [403, /signed-in account.*operator role/],
   [500, /Request failed with status 500/],
@@ -282,15 +383,17 @@ for (const [status, expected] of [
         assert.deepEqual(result.fields, []);
         assert.match(result.emptyFieldsNotice, expected);
       }
-      assert.equal(ctx.calls.filter(({ url }) => url.endsWith('/keys')).length, 1);
-      assert.deepEqual(ctx.saved, []);
+      assert.equal(ctx.calls.filter(({ url }) => url.endsWith('/keys')).length, attempts);
+      // Only the renewal saves; no key was created
+      assert.equal(ctx.saved.length, attempts - 1);
+      assert.ok(ctx.saved.every((saved) => Object.keys(saved.leapter_eval_keys).length === 0));
     }
   });
 }
 
 test('field loads show management failures during blueprint discovery as notices', { timeout: 1500 }, async () => {
-  for (const [status, expected] of [
-    [401, /cluster rejected the Leapter sign-in.*reconnect/],
+  for (const [status, expected, attempts = 1] of [
+    [401, /cluster rejected the Leapter sign-in.*reconnect/, 2],
     [403, /signed-in account.*operator role/],
     [404, /could not find the requested environment/],
   ]) {
@@ -300,37 +403,29 @@ test('field loads show management failures during blueprint discovery as notices
     const result = await node.methods.resourceMapping.getOperationFields.call(ctx);
     assert.deepEqual(result.fields, []);
     assert.match(result.emptyFieldsNotice, expected);
-    assert.equal(ctx.calls.length, 1);
-    assert.ok(ctx.calls[0].url.endsWith('/status'));
-    assert.deepEqual(ctx.saved, []);
+    assert.equal(ctx.calls.length, attempts);
+    assert.ok(ctx.calls.every(({ url }) => url.endsWith('/status')));
+    assert.equal(ctx.saved.length, attempts - 1);
   }
 });
 
-test('field loads show expired and disconnected sign-ins without making requests', async () => {
-  for (const [credentials, expected] of [
-    [data({ expired: true }), /older than an hour.*reconnect/],
-    [data({ oauthTokenData: undefined }), /not connected.*connect/],
-  ]) {
-    const ctx = context(credentials);
-    const result = await node.methods.resourceMapping.getOperationFields.call(ctx);
-    assert.deepEqual(result.fields, []);
-    assert.match(result.emptyFieldsNotice, expected);
-    assert.deepEqual(ctx.calls, []);
-    assert.deepEqual(ctx.saved, []);
-  }
-});
-
-test('field loads show expiry between discovery and key creation without minting a key', async () => {
-  const credentials = data();
-  const ctx = context(credentials, { answer: ({ url }) => {
-    assert.ok(url.endsWith('/status'));
-    credentials.oauthTokenData.id_token = jwt({ sub: 'expired-during-discovery', exp: 1 });
-    return { environments: [{ applications: [{ slug: 'app', callable: [{ id: 'blueprint' }] }] }] };
-  } });
+test('field loads show a disconnected sign-in without making requests', async () => {
+  const ctx = context(data({ oauthTokenData: undefined }), { refresh: () => { throw new Error('invalid_grant'); } });
   const result = await node.methods.resourceMapping.getOperationFields.call(ctx);
   assert.deepEqual(result.fields, []);
-  assert.match(result.emptyFieldsNotice, /Access to app needs a new sign-in.*reconnect/);
-  assert.equal(ctx.calls.length, 1);
+  assert.match(result.emptyFieldsNotice, /not connected.*connect/);
+  assert.deepEqual(ctx.calls, []);
+  assert.deepEqual(ctx.saved, []);
+});
+
+test('field loads show a refused sign-in that cannot be renewed', async () => {
+  const ctx = context(data({ expired: true }), {
+    refresh: () => { throw new Error('invalid_grant'); },
+    answer: () => { throw Object.assign(new Error('Unauthorized'), { response: { status: 401 } }); },
+  });
+  const result = await node.methods.resourceMapping.getOperationFields.call(ctx);
+  assert.deepEqual(result.fields, []);
+  assert.match(result.emptyFieldsNotice, /could not be renewed.*reconnect/);
   assert.deepEqual(ctx.saved, []);
 });
 
@@ -376,9 +471,9 @@ test('management 401s ask to reconnect for project and blueprint lists, includin
       assert.doesNotMatch(error.message, /activat|minute|revoked/);
       return true;
     });
-    // Blueprint discovery may also prewarm the engine with the already stored key.
-    assert.equal(ctx.calls.filter(({ url }) => url.includes('/runtime-management/')).length, 1);
-    assert.deepEqual(ctx.saved, []);
+    // Renewed once and asked again; discovery may also prewarm the engine with the stored key.
+    assert.equal(ctx.calls.filter(({ url }) => url.includes('/runtime-management/')).length, 2);
+    assert.equal(ctx.saved.length, 1);
   }
 });
 

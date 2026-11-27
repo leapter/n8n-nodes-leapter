@@ -14,7 +14,12 @@ export function tokenData(credentials: ICredentialDataDecryptedObject): IDataObj
 	return (credentials.oauthTokenData ?? {}) as IDataObject;
 }
 
-/** Shared by provisioning and preAuthentication; never share keys between sign-ins or clusters. */
+/**
+ * Shared by provisioning and preAuthentication; never share keys between sign-ins or clusters.
+ * The id token names the sign-in: it is never sent, and it survives refresh, because n8n merges a
+ * refresh answer into the stored token data and the sign-in server returns no new id token there.
+ * Reconnect brings a new one; Disconnect removes it.
+ */
 export function oauthKeyState(credentials: ICredentialDataDecryptedObject): OAuthKeyState {
 	const token = tokenData(credentials).id_token;
 	const empty = (): OAuthKeyState => ({ latest: {}, unsaved: false, queue: Promise.resolve() });
@@ -42,14 +47,17 @@ export function oauthKeys(credentials: ICredentialDataDecryptedObject): EvalKeyM
 	return keys;
 }
 
-/** The id token is not renewed by refresh. Leave a minute for clock skew and request time. */
-export function idTokenUsable(token: IDataObject): boolean {
-	if (typeof token.id_token !== 'string') return false;
+/**
+ * Whether a JWT expires within a minute (clock skew and request time). False when it carries no
+ * readable `exp`: the cluster's 401 then starts the refresh.
+ */
+export function expiresSoon(jwt: unknown): boolean {
+	if (typeof jwt !== 'string') return false;
 	try {
-		const parts = token.id_token.split('.');
+		const parts = jwt.split('.');
 		if (parts.length !== 3) return false;
 		const { exp } = JSON.parse(Buffer.from(parts[1], 'base64url').toString()) as { exp?: number };
-		return typeof exp === 'number' && Number.isFinite(exp) && Date.now() / 1000 < exp - 60;
+		return typeof exp === 'number' && Number.isFinite(exp) && Date.now() / 1000 >= exp - 60;
 	} catch {
 		return false;
 	}

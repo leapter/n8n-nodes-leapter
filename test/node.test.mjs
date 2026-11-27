@@ -36,13 +36,15 @@ const ran = () => ({ body: { total: 3 }, headers: { 'x-run-id': 'run-1' } });
 // An execution or field-load context for project dev::app, blueprint bp-1, whose credential holds
 // a key for the project. `answer` gets each request through the credential.
 let serial = 0;
-function context({ credential = {}, answer = ran } = {}) {
+function context({ credential = {}, answer = ran, parameters: own = {}, input = {} } = {}) {
   serial += 1;
   const calls = [];
-  const parameters = { project: 'dev::app', operation: 'bp-1', inputMode: 'json', parametersJson: '{"a":1}' };
+  const bodies = [];
+  const parameters = { project: 'dev::app', operation: 'bp-1', inputMode: 'json', parametersJson: '{"a":1}', ...own };
   return {
     calls,
-    getInputData: () => [{ json: {} }],
+    bodies,
+    getInputData: () => [{ json: input }],
     getExecutionId: () => 'execution-1',
     getNode: () => NODE,
     async getCredentials() {
@@ -61,6 +63,7 @@ function context({ credential = {}, answer = ran } = {}) {
     helpers: {
       async httpRequestWithAuthentication(_type, options) {
         calls.push(`${options.method} ${options.url}`);
+        bodies.push(options.body);
         return answer(options);
       },
       async httpRequest(options) {
@@ -131,5 +134,84 @@ test('a field load that reaches the control plane shows the Run Address notice a
   assert.deepEqual(ctx.calls, [
     'GET https://cluster.example/runtime-management/environments/dev/status',
     'GET https://cluster.example/runtime/api/v1/dev/app/openapi',
+  ]);
+});
+
+test('Map Automatically sends the input fields named like a blueprint input, and nothing else', async () => {
+  const ctx = context({
+    parameters: {
+      inputMode: 'visual',
+      parameters: {
+        mappingMode: 'autoMapInputData',
+        value: null,
+        schema: [{ id: 'body.positionen' }, { id: 'body.name' }, { id: '__leapter_no_inputs' }],
+      },
+    },
+    input: { positionen: [1, 2], name: 'Acme', other: true, __leapter_no_inputs: 'x' },
+  });
+  await node.execute.call(ctx);
+  assert.deepEqual(ctx.bodies, [{ positionen: [1, 2], name: 'Acme' }]);
+});
+
+test('Map Automatically keeps an item\'s string a string, even when it looks like JSON', async () => {
+  const ctx = context({
+    parameters: {
+      inputMode: 'visual',
+      parameters: { mappingMode: 'autoMapInputData', value: null, schema: [{ id: 'body.note' }] },
+    },
+    input: { note: '["draft"]' },
+  });
+  await node.execute.call(ctx);
+  assert.deepEqual(ctx.bodies, [{ note: '["draft"]' }]);
+});
+
+test('mapped list inputs are sent as arrays, from JSON text (as 0.2.0 saved them) or an array', async () => {
+  const ctx = context({
+    parameters: {
+      inputMode: 'visual',
+      parameters: { mappingMode: 'defineBelow', value: { 'body.saved': '[1, 2, 3]', 'body.mapped': ['a'] } },
+    },
+  });
+  await node.execute.call(ctx);
+  assert.deepEqual(ctx.bodies, [{ saved: [1, 2, 3], mapped: ['a'] }]);
+});
+
+test('a list input is an array field without a made-up default', async () => {
+  const spec = {
+    paths: {
+      '/models/bp-1/runs': {
+        post: {
+          requestBody: {
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['positionen'],
+                  properties: { positionen: { type: 'array', items: { type: 'number' } } },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  const ctx = context({
+    answer: ({ url }) =>
+      url.endsWith('/status')
+        ? { environments: [{ applications: [{ slug: 'app', callable: [{ id: 'bp-1' }] }] }] }
+        : spec,
+  });
+  const { fields } = await node.methods.resourceMapping.getOperationFields.call(ctx);
+  assert.deepEqual(fields, [
+    {
+      id: 'body.positionen',
+      displayName: 'positionen',
+      required: true,
+      defaultMatch: false,
+      display: true,
+      type: 'array',
+      canBeUsedToMatch: false,
+    },
   ]);
 });

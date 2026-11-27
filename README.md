@@ -103,10 +103,10 @@ The first use of a project creates its access key automatically; the node starts
 
 Choose **Service Account Key** or **OAuth2** in the selector at the top right of the node's credential section.
 
-- **Service Account Key** is the default, for shared or unattended workflows. An admin gives you a key of the cluster's `n8n` service account. Existing workflows keep using this credential without changes.
-- **OAuth2** signs in with your own Leapter account, for members on a registered n8n install. You need the **operator** role in the target environment and n8n **2.27 or later**.
+- **OAuth2** signs in with your own Leapter account. On **Leapter SaaS** this is the way to connect. You need the **operator** role in the target environment and n8n **2.27 or later**.
+- **Service Account Key** is the default, for shared or unattended workflows on a cluster whose admin gives you a key of its `n8n` service account. It is not self-service on Leapter SaaS. Existing workflows keep using this credential without changes.
 
-Both credentials create and store a project's evaluation key on first use. Runs send only that key to the engine; management calls use the service key or the signed-in member's id token.
+Both credentials create and store a project's evaluation key on first use. Runs send only that key to the engine; management calls use the service key or the signed-in member's access token.
 
 ### Service Account Key
 
@@ -125,9 +125,9 @@ Both credentials create and store a project's evaluation key on first use. Runs 
 
 ### OAuth2 Sign-in
 
-1. For **Leapter SaaS**, send Leapter your n8n credential's **OAuth Redirect URL** to enable sign-in. For **self-hosted Leapter**, ask your administrator to register this URL with your sign-in server. The consent page shows **Leapter for n8n**.
-2. Select **OAuth2** in the Leapter node and create a **Leapter OAuth2 API** credential.
-3. The hosted Leapter settings are already configured. For another cluster, turn on **Advanced Settings** and enter the fields below. Turning it off switches back to hosted Leapter and clears custom settings when saved.
+1. Select **OAuth2** in the Leapter node and create a **Leapter OAuth2 API** credential. Copy its **OAuth Redirect URL**.
+2. For **Leapter SaaS**, an owner or admin of your Leapter team creates a Client ID with that URL in the Leapter Lab under **Integrations → n8n**. Enter that **Client ID** in the credential. A team can have one Client ID per n8n instance, and only its members can sign in with them. For **self-hosted Leapter**, ask your administrator for a Client ID registered with this URL. The cluster must accept that client's access token: its audience must be listed in the cluster's issuer mapping.
+3. The hosted Leapter server settings are already configured. For another cluster, turn on **Advanced Settings** and enter the fields below. Turning it off switches back to hosted Leapter and clears these fields when saved; the Client ID stays.
 4. Click **Connect**, sign in, and allow access. Then pick a project and Blueprint in the node.
 
 | Custom server field | Value |
@@ -135,18 +135,17 @@ Both credentials create and store a project's evaluation key on first use. Runs 
 | Leapter Server | Your Runtime Cluster's address |
 | Run Address | Where the cluster answers runs; leave empty to use the Leapter Server |
 | Sign-in Server | From your Leapter administrator |
-| Client ID | From your Leapter administrator |
 
-The sign-in uses OAuth2 with PKCE and the `openid email profile` scopes. The id token lasts an hour; token refresh does not renew it. After that, listing projects or Blueprints and granting access to another project requires **Reconnect** (called **Switch account** in some n8n versions). Runs for projects with stored evaluation keys keep working, including after an n8n restart. Reconnecting preserves those keys.
+The sign-in uses OAuth2 with PKCE and the `openid email profile` scopes. The credential sends your sign-in's access token to the Leapter Server, so only enter a server you trust. The node renews the access token by itself, so lists and new project access keep working without reconnecting. Runs send only the stored evaluation keys, including after an n8n restart. **Reconnect** (called **Switch account** in some n8n versions) preserves those keys.
 
-**Disconnect** is different from expiry or reconnect: n8n deletes the credential's OAuth token data, including its saved evaluation keys for **all projects using that credential**. Runs then require a new connection and new keys, which may need up to a minute to activate. Disconnect does not revoke the old evaluation keys on the cluster; revoke those separately in the Admin UI when they are no longer needed.
+**Disconnect** is different from reconnect: n8n deletes the credential's OAuth token data, including its saved evaluation keys for **all projects using that credential**. Runs then require a new connection and new keys, which may need up to a minute to activate. Disconnect does not revoke the old evaluation keys on the cluster; revoke those separately in the Admin UI when they are no longer needed.
 
 n8n stores evaluation keys encrypted in the credential and does not send them to the editor. For OAuth2 they live inside the stored token data alongside the access, refresh and id tokens. Anyone able to export decrypted credentials can read the keys.
 
 ## Compatibility
 
 - **Minimum n8n version**: 2.0.0 for Service Account Key; 2.27.0 for OAuth2 sign-in
-- **OAuth2 tested with**: n8n 2.27.5 and 2.44.7, including reconnect, expired sign-in and persisted-key runs
+- **OAuth2 tested with**: n8n 2.27.5 and 2.44.7 with the earlier id-token sign-in; the access-token sign-in is not yet tested end to end
 - **Service Account Key tested with**: n8n 2.0.3, 2.27.5, 2.39.6, 2.44.5 and 2.44.7
 
 ## Usage
@@ -157,7 +156,7 @@ Visual mode provides a guided experience with field-by-field mapping:
 
 1. Select your project and Blueprint
 2. The node automatically loads available input fields
-3. Map values from previous nodes or enter static values
+3. Map values from previous nodes or enter static values. List inputs take a JSON array. **Map Automatically** sends the input item's fields that are named like a Blueprint input.
 4. Each field shows its type and whether it's required
 
 ### JSON Mode
